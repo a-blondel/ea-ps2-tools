@@ -1,0 +1,17 @@
+{
+  "name": "ea-ps2-dnas-tool",
+  "version": "0.1.0",
+  "description": "Generate OPL .cht / PCSX2 .pnach DNAS bypass patches from an EA PS2 ISO, in the browser.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "build:test": "tsc -p tsconfig.tmp.json",
+    "test": "npm run build:test && node --env-file=.env test/run.mjs && node --env-file=.env test/iso.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

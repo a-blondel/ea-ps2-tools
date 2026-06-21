@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EA PS2 — DNAS Bypass Patch Generator</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>EA&nbsp;PS2 — DNAS Bypass Generator</h1>
+        <p class="sub">
+          Drop a PS2 ISO of an EA online title. Everything runs locally in your
+          browser — the disc is never uploaded.
+        </p>
+      </header>
+
+      <label id="drop" class="drop" for="file">
+        <input id="file" type="file" accept=".iso,.bin,.img" hidden />
+        <span class="drop-main">Choose an ISO</span>
+        <span class="drop-sub">or drag &amp; drop it here</span>
+      </label>
+
+      <p id="status" class="status" hidden></p>
+
+      <section id="result" hidden>
+        <div class="row">
+          <label class="field">
+            <span>Game title (free text, used in the header comment)</span>
+            <input id="title" type="text" />
+          </label>
+          <div class="field">
+            <span>Serial</span>
+            <code id="serial" class="pill"></code>
+          </div>
+        </div>
+
+        <div id="warnings" class="warnings" hidden></div>
+        <div id="targets" class="targets"></div>
+
+        <div class="output">
+          <div class="output-head">
+            <h2>OPL cheat — <code id="cht-name"></code></h2>
+            <div class="btns">
+              <button id="copy-cht" type="button">Copy</button>
+              <button id="dl-cht" type="button" class="primary">Download .cht</button>
+            </div>
+          </div>
+          <pre id="cht" class="code"></pre>
+        </div>
+
+        <details class="output" open>
+          <summary>PCSX2 .pnach — one file per ELF (CRC computed automatically)</summary>
+          <div id="pnach"></div>
+        </details>
+      </section>
+
+      <footer>
+        <p>
+          Finds the DNAS check by anchoring on the <code>DNASSKIP</code> string
+          reference, so it picks the correct branch even when the byte pattern
+          repeats. OPL cheats also carry a runtime <code>9x</code> hook so the
+          EA_DASH patch applies once the dashboard is in RAM.
+        </p>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
