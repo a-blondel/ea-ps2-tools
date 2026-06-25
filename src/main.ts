@@ -27,8 +27,8 @@ function setStatus(msg: string, error = false) {
   statusEl.classList.toggle("error", error);
 }
 
-function targetRow(t: ElfTarget): string {
-  const a = t.analysis;
+function targetRow(t: ElfTarget, i: number): string {
+  const a = t.dnas;
   const bne = a.bne
     ? `${hex8(a.bne.vaddr)} <span class="k">(orig ${hex8(a.bne.original)}, anchor ${
         a.bne.anchorDist === null ? "none" : "0x" + a.bne.anchorDist.toString(16)
@@ -37,16 +37,28 @@ function targetRow(t: ElfTarget): string {
   const hook = a.hook
     ? `${hex8(a.hook.vaddr)} <span class="k">= ${hex8(a.hook.value)}</span>`
     : `<span class="miss">not found</span>`;
+  const ssl = t.ssl.port
+    ? `${hex8(t.ssl.port.vaddr)} <span class="k">port +0, NOP ${
+        t.ssl.secure ? hex8(t.ssl.secure.vaddr) : "?"
+      }</span>`
+    : `<span class="miss">not found</span>`;
   const crc = t.crc !== undefined ? hex8(t.crc) : "—";
   const extra =
     a.candidates.length > 1
       ? `<div class="k">${a.candidates.length} pattern matches; chose the DNASSKIP-anchored one</div>`
       : "";
+  const chk = (feat: "dnas" | "ssl", found: boolean) =>
+    `<label class="toggle">
+        <input type="checkbox" data-feat="${feat}" data-i="${i}"${found ? " checked" : " disabled"} />
+        ${feat === "dnas" ? "DNAS bypass" : "SSL bypass"}
+      </label>`;
   return `<div class="target">
       <h3>${t.label}</h3>
+      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}</div>
       <div class="grid">
         <span class="k">DNAS BNE</span><span>${bne}</span>
         <span class="k">Hook (9x)</span><span>${hook}</span>
+        <span class="k">SSL site</span><span>${ssl}</span>
         <span class="k">ELF CRC</span><span>${crc}</span>
       </div>${extra}
     </div>`;
@@ -72,6 +84,15 @@ function render(game: GameAnalysis) {
   refreshOutputs();
   resultEl.hidden = false;
 }
+
+targetsEl.addEventListener("change", (e) => {
+  const cb = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-feat]");
+  if (!cb || !current) return;
+  const t = current.targets[Number(cb.dataset.i)];
+  if (!t) return;
+  t.enable[cb.dataset.feat as "dnas" | "ssl"] = cb.checked;
+  refreshOutputs();
+});
 
 function refreshOutputs() {
   if (!current) return;

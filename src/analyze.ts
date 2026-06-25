@@ -3,6 +3,7 @@
 
 import { Elf } from "./elf.js";
 import { analyzeDnas } from "./dnas.js";
+import { analyzeSsl } from "./ssl.js";
 import { guessTitle } from "./title.js";
 import type { ElfTarget } from "./cheats.js";
 
@@ -38,20 +39,24 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
 
   if (mainBlob) {
     const e = new Elf(mainBlob.data);
-    const a = analyzeDnas(e);
-    if (!a.bne) warnings.push("No DNAS check found in the main ELF.");
-    if (a.ambiguous) warnings.push("Main ELF: multiple DNAS candidates — verify the selected address.");
-    targets.push({ label: "Main Game", analysis: a, crc: e.crc() });
+    const dnas = analyzeDnas(e);
+    const ssl = analyzeSsl(e);
+    if (!dnas.bne) warnings.push("No DNAS check found in the main ELF.");
+    if (dnas.ambiguous) warnings.push("Main ELF: multiple DNAS candidates — verify the selected address.");
+    if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in the main ELF.");
+    targets.push({ label: "Main Game", dnas, ssl, crc: e.crc(), enable: { dnas: true, ssl: true } });
   } else {
     warnings.push(`Main ELF "${serial}" not found in the ISO.`);
   }
 
   if (dashBlob) {
     const e = new Elf(dashBlob.data);
-    const a = analyzeDnas(e);
-    if (!a.bne) warnings.push("No DNAS check found in EA_DASH.ELF.");
-    if (a.ambiguous) warnings.push("EA_DASH: multiple DNAS candidates — verify the selected address.");
-    targets.push({ label: "EA Dashboard", analysis: a, crc: e.crc() });
+    const dnas = analyzeDnas(e);
+    const ssl = analyzeSsl(e);
+    if (!dnas.bne) warnings.push("No DNAS check found in EA_DASH.ELF.");
+    if (dnas.ambiguous) warnings.push("EA_DASH: multiple DNAS candidates — verify the selected address.");
+    if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in EA_DASH.ELF.");
+    targets.push({ label: "EA Dashboard", dnas, ssl, crc: e.crc(), enable: { dnas: true, ssl: true } });
   } else {
     warnings.push("EA_DASH.ELF not found — dashboard cheat will be omitted.");
   }

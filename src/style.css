@@ -99,6 +99,18 @@ section#result { margin-top: 28px; }
   padding: 14px 16px;
 }
 .target h3 { margin: 0 0 10px; font-size: .95rem; }
+.target .toggles { display: flex; gap: 16px; margin: 0 0 12px; flex-wrap: wrap; }
+.target .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: .85rem;
+  cursor: pointer;
+  user-select: none;
+}
+.target .toggle input { accent-color: var(--accent); cursor: pointer; }
+.target .toggle input:disabled { cursor: not-allowed; }
+.target .toggle:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
 .target .grid {
   display: grid;
   grid-template-columns: auto 1fr;

@@ -52,6 +52,8 @@ assert.ok(cht.includes("90370428 0C0DC0B2"), "main hook from ISO");
 assert.ok(cht.includes("9023D698 0C08F54E"), "dash hook from ISO");
 assert.ok(cht.includes("205C8028 00000000"), "main BNE from ISO");
 assert.ok(cht.includes("201E16CC 00000000"), "dash BNE from ISO");
+assert.ok(cht.includes("205D10C0 24E70000"), "main SSL port from ISO");
+assert.ok(cht.includes("201E4088 24E70000"), "dash SSL port from ISO");
 
 closeSync(fd);
 console.log("ISO END-TO-END PASSED ✓");

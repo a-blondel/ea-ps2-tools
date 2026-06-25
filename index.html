@@ -3,15 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EA PS2 — DNAS Bypass Patch Generator</title>
+    <title>EA PS2 Patch Generator</title>
   </head>
   <body>
     <main>
       <header>
-        <h1>EA&nbsp;PS2 — DNAS Bypass Generator</h1>
+        <h1>EA&nbsp;PS2 Patch Generator</h1>
         <p class="sub">
-          Drop a PS2 ISO of an EA online title. Everything runs locally in your
-          browser — the disc is never uploaded.
+          Drop a PS2 ISO of an EA online title. Toggle DNAS and SSL bypass per
+          ELF. Everything runs locally in your browser — the disc is never
+          uploaded.
         </p>
       </header>
 
@@ -59,8 +60,10 @@
         <p>
           Finds the DNAS check by anchoring on the <code>DNASSKIP</code> string
           reference, so it picks the correct branch even when the byte pattern
-          repeats. OPL cheats also carry a runtime <code>9x</code> hook so the
-          EA_DASH patch applies once the dashboard is in RAM.
+          repeats. SSL bypass NOPs <code>ProtoAriesSecure</code> and keeps the
+          plain lobby port (<code>+1</code>&rarr;<code>+0</code>). OPL cheats also
+          carry a runtime <code>9x</code> hook so the EA_DASH patch applies once
+          the dashboard is in RAM.
         </p>
       </footer>
     </main>

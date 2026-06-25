@@ -1,12 +1,21 @@
-// Build OPL (.cht) and PCSX2 (.pnach) DNAS-bypass output from the analysis.
+// Build OPL (.cht) and PCSX2 (.pnach) bypass output from the analysis.
+// Two independent features per ELF: DNAS bypass and SSL bypass, each toggleable.
 
 import { hex8 } from "./bytes.js";
 import type { DnasAnalysis } from "./dnas.js";
+import type { SslAnalysis } from "./ssl.js";
 
 export interface ElfTarget {
   label: string; // "Main Game" | "EA Dashboard"
-  analysis: DnasAnalysis;
+  dnas: DnasAnalysis;
+  ssl: SslAnalysis;
   crc?: number; // PCSX2 ELF CRC, for the pnach filename
+  enable: { dnas: boolean; ssl: boolean }; // UI toggles (default both on)
+}
+
+interface Write {
+  addr: number;
+  value: number;
 }
 
 // PS2 cheat codes are one command nibble + a 28-bit (7-hex) EE address,
@@ -15,28 +24,42 @@ function code(cmd: string, addr: number): string {
   return cmd + (addr & 0x0fffffff).toString(16).toUpperCase().padStart(7, "0");
 }
 
+/** Memory writes a target contributes, honouring its enable toggles. */
+function patchWrites(t: ElfTarget): Write[] {
+  const out: Write[] = [];
+  if (t.enable.dnas && t.dnas.bne) out.push({ addr: t.dnas.bne.vaddr, value: 0 });
+  if (t.enable.ssl && t.ssl.port) out.push({ addr: t.ssl.port.vaddr, value: t.ssl.port.value });
+  if (t.enable.ssl && t.ssl.secure) out.push({ addr: t.ssl.secure.vaddr, value: t.ssl.secure.value });
+  return out;
+}
+
+/** "DNAS + SSL", "DNAS", "SSL" — whichever features are enabled and present. */
+function featureLabel(t: ElfTarget): string {
+  const f: string[] = [];
+  if (t.enable.dnas && t.dnas.bne) f.push("DNAS");
+  if (t.enable.ssl && (t.ssl.port || t.ssl.secure)) f.push("SSL");
+  return f.join(" + ");
+}
+
 /**
  * OPL .cht — Open-PS2-Loader / PS2RD cheat format. The first line is the cheat
- * entry name: a quoted `"<title> /ID <serial>"` (no leading "//", so the OPL
- * parser keeps it). Lines starting with "//" are comments the parser strips, so
- * we use them as section headers. All hooks (9x) and BNE patches (2x) live under
- * that single entry; OPL applies the whole code list at each hook firing.
- *
- * Each section repeats both BNE patches after its hook, mirroring the proven
- * community cheat; the duplicate writes are harmless.
+ * entry name: a quoted `"<title> /ID <serial>"`. Lines starting with "//" are
+ * comments the parser strips, so we use them as section headers. Each ELF with a
+ * runtime hook (9x) gets a section; OPL applies the whole code list whenever any
+ * hook fires, so every enabled patch is repeated under each hook (the duplicate
+ * writes are harmless and mirror the proven community cheat).
  */
 export function buildCht(serial: string, title: string, targets: ElfTarget[]): string {
-  const patchLines: string[] = [];
-  for (const t of targets) {
-    if (t.analysis.bne) patchLines.push(`${code("2", t.analysis.bne.vaddr)} 00000000`);
-  }
+  const allWrites = targets.flatMap(patchWrites);
+  const patchLines = allWrites.map((w) => `${code("2", w.addr)} ${hex8(w.value)}`);
 
   const groups: string[] = [];
   for (const t of targets) {
-    if (!t.analysis.hook) continue;
+    if (!t.dnas.hook) continue;
+    if (patchWrites(t).length === 0) continue; // nothing enabled for this ELF
     groups.push(
-      `//DNAS bypass ${t.label}\n` +
-        `${code("9", t.analysis.hook.vaddr)} ${hex8(t.analysis.hook.value)}\n` +
+      `//${featureLabel(t)} bypass ${t.label}\n` +
+        `${code("9", t.dnas.hook.vaddr)} ${hex8(t.dnas.hook.value)}\n` +
         patchLines.join("\n") + "\n",
     );
   }
@@ -45,7 +68,7 @@ export function buildCht(serial: string, title: string, targets: ElfTarget[]): s
   if (groups.length > 0) {
     out += groups.join("\n"); // blank line between sections
   } else if (patchLines.length > 0) {
-    out += `//DNAS bypass\n` + patchLines.join("\n") + "\n";
+    out += `//bypass\n` + patchLines.join("\n") + "\n";
   }
   return out;
 }
@@ -63,21 +86,26 @@ export interface PnachFile {
 /**
  * PCSX2 .pnach — one file per ELF. PCSX2 picks the file whose CRC (in the
  * filename) matches the ELF it is currently running, so each file patches only
- * its own BNE and needs no runtime hook. The filename keeps the disc serial as
- * prefix for both files; only the CRC differs (main ELF vs EA_DASH).
+ * its own addresses and needs no runtime hook. Every enabled write for that ELF
+ * becomes a `patch=` line.
  */
 export function buildPnach(serial: string, targets: ElfTarget[]): PnachFile[] {
   const ser = pcsx2Serial(serial);
   const files: PnachFile[] = [];
   for (const t of targets) {
-    if (!t.analysis.bne || t.crc === undefined) continue;
+    if (t.crc === undefined) continue;
+    const writes = patchWrites(t);
+    if (writes.length === 0) continue;
+    const lines = writes.map(
+      (w) => `patch=1,EE,${code("2", w.addr)},extended,${hex8(w.value)}`,
+    );
     files.push({
       filename: `${ser}_${hex8(t.crc)}.pnach`,
       content:
         `[Network\\DNAS Patch]\n` +
         `author=EA Nation Hub\n` +
-        `description=DNAS check bypass\n` +
-        `patch=1,EE,${code("2", t.analysis.bne.vaddr)},extended,00000000\n`,
+        `description=${featureLabel(t)} bypass\n` +
+        lines.join("\n") + "\n",
     });
   }
   return files;
