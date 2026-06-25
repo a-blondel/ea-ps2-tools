@@ -4,6 +4,7 @@
 import { Elf } from "./elf.js";
 import { analyzeDnas } from "./dnas.js";
 import { analyzeSsl } from "./ssl.js";
+import { analyzePort } from "./port.js";
 import { guessTitle } from "./title.js";
 import type { ElfTarget } from "./cheats.js";
 
@@ -16,6 +17,7 @@ export interface NamedBlob {
 export interface GameAnalysis {
   serial: string;
   title: string; // best-effort guess from the main ELF, editable in the UI
+  port: number | null; // detected game port (shared across ELFs), editable
   targets: ElfTarget[]; // main first, then dashboard(s)
   warnings: string[];
 }
@@ -41,10 +43,12 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     const e = new Elf(mainBlob.data);
     const dnas = analyzeDnas(e);
     const ssl = analyzeSsl(e);
+    const port = analyzePort(e, ssl);
     if (!dnas.bne) warnings.push("No DNAS check found in the main ELF.");
     if (dnas.ambiguous) warnings.push("Main ELF: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in the main ELF.");
-    targets.push({ label: "Main Game", dnas, ssl, crc: e.crc(), enable: { dnas: true, ssl: true } });
+    if (!port) warnings.push("No game port found in the main ELF.");
+    targets.push({ label: "Main Game", dnas, ssl, port, crc: e.crc(), enable: { dnas: true, ssl: true, port: false } });
   } else {
     warnings.push(`Main ELF "${serial}" not found in the ISO.`);
   }
@@ -53,14 +57,18 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     const e = new Elf(dashBlob.data);
     const dnas = analyzeDnas(e);
     const ssl = analyzeSsl(e);
+    const port = analyzePort(e, ssl);
     if (!dnas.bne) warnings.push("No DNAS check found in EA_DASH.ELF.");
     if (dnas.ambiguous) warnings.push("EA_DASH: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in EA_DASH.ELF.");
-    targets.push({ label: "EA Dashboard", dnas, ssl, crc: e.crc(), enable: { dnas: true, ssl: true } });
+    targets.push({ label: "EA Dashboard", dnas, ssl, port, crc: e.crc(), enable: { dnas: true, ssl: true, port: false } });
   } else {
     warnings.push("EA_DASH.ELF not found — dashboard cheat will be omitted.");
   }
 
   const title = mainBlob ? guessTitle(mainBlob.data, serial) : serial;
-  return { serial, title, targets, warnings };
+  // Display value: the port we could read statically from any ELF (null if only
+  // connect-site patching is available, e.g. NASCAR — user enters it manually).
+  const port = targets.find((t) => t.port?.value != null)?.port?.value ?? null;
+  return { serial, title, port, targets, warnings };
 }

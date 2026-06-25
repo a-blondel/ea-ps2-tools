@@ -110,6 +110,16 @@ section#result { margin-top: 28px; }
 }
 .target .toggle input { accent-color: var(--accent); cursor: pointer; }
 .target .toggle input:disabled { cursor: not-allowed; }
+input.bad { border-color: #ff8a8a !important; }
+input:disabled { opacity: .5; cursor: not-allowed; }
+.field .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+.field .toggle input { accent-color: var(--accent); cursor: pointer; width: auto; }
 .target .toggle:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
 .target .grid {
   display: grid;

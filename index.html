@@ -34,6 +34,10 @@
             <span>Serial</span>
             <code id="serial" class="pill"></code>
           </div>
+          <label class="field" id="port-field" hidden>
+            <span>Game port (do NOT change unless otherwise specified)</span>
+            <input id="port" type="number" min="1" max="65535" step="1" disabled />
+          </label>
         </div>
 
         <div id="warnings" class="warnings" hidden></div>
@@ -61,7 +65,7 @@
           Finds the DNAS check by anchoring on the <code>DNASSKIP</code> string
           reference, so it picks the correct branch even when the byte pattern
           repeats. SSL bypass NOPs <code>ProtoAriesSecure</code> and keeps the
-          plain lobby port (<code>+1</code>&rarr;<code>+0</code>). OPL cheats also
+          plain game port (<code>+1</code>&rarr;<code>+0</code>). OPL cheats also
           carry a runtime <code>9x</code> hook so the EA_DASH patch applies once
           the dashboard is in RAM.
         </p>

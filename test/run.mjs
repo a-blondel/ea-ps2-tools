@@ -48,7 +48,7 @@ assert.equal(dashSsl.port.vaddr >>> 0, 0x001e4088, "dash SSL port addr");
 assert.equal(dashSsl.secure.vaddr >>> 0, 0x001e4090, "dash SSL secure (NOP) addr");
 
 const expected = `"FIFA07 /ID SLUS_214.33"
-//DNAS + SSL bypass Main Game
+//Online patches for Main Game: DNAS + SSL
 90370428 0C0DC0B2
 205C8028 00000000
 205D10C0 24E70000
@@ -57,7 +57,7 @@ const expected = `"FIFA07 /ID SLUS_214.33"
 201E4088 24E70000
 201E4090 00000000
 
-//DNAS + SSL bypass EA Dashboard
+//Online patches for EA Dashboard: DNAS + SSL
 9023D698 0C08F54E
 205C8028 00000000
 205D10C0 24E70000
@@ -74,14 +74,38 @@ for (const t of onlyDnas) t.enable.ssl = false;
 const chtDnas = buildCht(serial, "FIFA07", onlyDnas);
 assert.ok(!chtDnas.includes("24E70000"), "SSL off -> no port line");
 assert.ok(chtDnas.includes("205C8028 00000000"), "SSL off -> DNAS still present");
-assert.ok(chtDnas.includes("//DNAS bypass Main Game"), "SSL off -> header drops SSL");
+assert.ok(chtDnas.includes("//Online patches for Main Game: DNAS\n"), "SSL off -> header drops SSL");
+
+// Game port: main = readable .data word; dash = connect-site rewrite.
+assert.equal(game.port, 10400, "detected game port (from main data word)");
+assert.equal(game.targets[0].port.kind, "data", "main port kind");
+assert.equal(game.targets[0].port.value, 10400, "main port value");
+assert.equal(game.targets[0].port.sites[0] >>> 0, 0x00725c5c, "main port addr");
+assert.equal(game.targets[1].port.kind, "connect", "dash port kind = connect rewrite");
+assert.equal(game.targets[1].port.value, null, "dash port value unknown (runtime)");
+assert.equal(game.targets[1].port.sites.length, 2, "dash connect has 2 lw a3 loads");
+
+// Port is opt-in per ELF: with the checkboxes off, no port write even if a value is passed.
+assert.ok(!buildCht(serial, "FIFA07", game.targets, 12345).includes("20725C5C"), "port off -> no main patch");
+assert.ok(!buildCht(serial, "FIFA07", game.targets, 12345).includes("34073039"), "port off -> no dash patch");
+
+// Tick "Edit game port" on both ELFs -> main data word 0x0000<port>; dash connect ori a3,zero,port.
+const withPort = structuredClone(game.targets);
+for (const t of withPort) t.enable.port = true;
+const chtPort = buildCht(serial, "FIFA07", withPort, 12345); // 0x3039
+assert.ok(chtPort.includes("20725C5C 00003039"), "port on -> main data word write");
+assert.ok(chtPort.includes("34073039"), "port on -> dash ori a3,zero,12345");
+assert.ok(chtPort.includes("Online patches for Main Game: DNAS + SSL + PORT"), "port on -> header gains PORT");
+const pnachPort = buildPnach(serial, withPort, 12345);
+assert.ok(pnachPort[0].content.includes("patch=1,EE,20725C5C,extended,00003039"), "main pnach data word");
+assert.ok(pnachPort[1].content.includes(",extended,34073039"), "dash pnach connect ori");
 
 // pnach: filenames carry the auto-computed PCSX2 CRC; one file per ELF.
 const pnach = buildPnach(serial, game.targets);
 console.log(pnach.map((f) => `${f.filename}:\n${f.content}`).join("\n"));
-const pnachMain = `[Network\\DNAS Patch]
+const pnachMain = `[Network\\Online Patches]
 author=EA Nation Hub
-description=DNAS + SSL bypass
+description=Online patches: DNAS + SSL
 patch=1,EE,205C8028,extended,00000000
 patch=1,EE,205D10C0,extended,24E70000
 patch=1,EE,205D10C8,extended,00000000
@@ -92,6 +116,6 @@ assert.equal(pnach[1].filename, "SLUS-21433_C4923636.pnach", "dash pnach filenam
 assert.ok(pnach[1].content.includes("patch=1,EE,201E16CC,extended,00000000"), "dash pnach DNAS line");
 assert.ok(pnach[1].content.includes("patch=1,EE,201E4088,extended,24E70000"), "dash pnach SSL port line");
 assert.ok(pnach[1].content.includes("patch=1,EE,201E4090,extended,00000000"), "dash pnach SSL secure line");
-assert.ok(pnach[1].content.startsWith("[Network\\DNAS Patch]"), "dash pnach header");
+assert.ok(pnach[1].content.startsWith("[Network\\Online Patches]"), "dash pnach header");
 
 console.log("ALL ASSERTIONS PASSED ✓");

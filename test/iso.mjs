@@ -54,6 +54,7 @@ assert.ok(cht.includes("205C8028 00000000"), "main BNE from ISO");
 assert.ok(cht.includes("201E16CC 00000000"), "dash BNE from ISO");
 assert.ok(cht.includes("205D10C0 24E70000"), "main SSL port from ISO");
 assert.ok(cht.includes("201E4088 24E70000"), "dash SSL port from ISO");
+assert.equal(game.port, 10400, "game port from ISO");
 
 closeSync(fd);
 console.log("ISO END-TO-END PASSED ✓");

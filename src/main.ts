@@ -12,6 +12,8 @@ const statusEl = $<HTMLParagraphElement>("status");
 const resultEl = $<HTMLElement>("result");
 const titleInput = $<HTMLInputElement>("title");
 const serialEl = $<HTMLElement>("serial");
+const portField = $<HTMLLabelElement>("port-field");
+const portInput = $<HTMLInputElement>("port");
 const warningsEl = $<HTMLDivElement>("warnings");
 const targetsEl = $<HTMLDivElement>("targets");
 const chtNameEl = $<HTMLElement>("cht-name");
@@ -42,23 +44,32 @@ function targetRow(t: ElfTarget, i: number): string {
         t.ssl.secure ? hex8(t.ssl.secure.vaddr) : "?"
       }</span>`
     : `<span class="miss">not found</span>`;
+  const port = t.port
+    ? t.port.kind === "data"
+      ? `${hex8(t.port.sites[0]!)} <span class="k">= ${t.port.value} (data word)</span>`
+      : `${t.port.sites.map((a) => hex8(a)).join(", ")} <span class="k">(connect rewrite)</span>`
+    : `<span class="miss">not found</span>`;
   const crc = t.crc !== undefined ? hex8(t.crc) : "—";
   const extra =
     a.candidates.length > 1
       ? `<div class="k">${a.candidates.length} pattern matches; chose the DNASSKIP-anchored one</div>`
       : "";
-  const chk = (feat: "dnas" | "ssl", found: boolean) =>
+  const labels = { dnas: "DNAS bypass", ssl: "SSL bypass", port: "Edit game port" };
+  const chk = (feat: "dnas" | "ssl" | "port", found: boolean) =>
     `<label class="toggle">
-        <input type="checkbox" data-feat="${feat}" data-i="${i}"${found ? " checked" : " disabled"} />
-        ${feat === "dnas" ? "DNAS bypass" : "SSL bypass"}
+        <input type="checkbox" data-feat="${feat}" data-i="${i}"${
+          t.enable[feat] && found ? " checked" : ""
+        }${found ? "" : " disabled"} />
+        ${labels[feat]}
       </label>`;
   return `<div class="target">
       <h3>${t.label}</h3>
-      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}</div>
+      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}${chk("port", !!t.port)}</div>
       <div class="grid">
         <span class="k">DNAS BNE</span><span>${bne}</span>
         <span class="k">Hook (9x)</span><span>${hook}</span>
         <span class="k">SSL site</span><span>${ssl}</span>
+        <span class="k">Game port</span><span>${port}</span>
         <span class="k">ELF CRC</span><span>${crc}</span>
       </div>${extra}
     </div>`;
@@ -68,6 +79,12 @@ function render(game: GameAnalysis) {
   current = game;
   serialEl.textContent = game.serial;
   if (!titleInput.value) titleInput.value = game.title;
+  const hasPort = game.targets.some((t) => t.port);
+  portField.hidden = !hasPort;
+  portInput.value = game.port !== null ? String(game.port) : "";
+  portInput.placeholder = "e.g. 40000";
+  portInput.classList.remove("bad");
+  syncPortField(); // locked until an "Edit game port" box is ticked
   chtNameEl.textContent = chtFilename(game.serial);
 
   if (game.warnings.length) {
@@ -90,16 +107,56 @@ targetsEl.addEventListener("change", (e) => {
   if (!cb || !current) return;
   const t = current.targets[Number(cb.dataset.i)];
   if (!t) return;
-  t.enable[cb.dataset.feat as "dnas" | "ssl"] = cb.checked;
+  const feat = cb.dataset.feat as "dnas" | "ssl" | "port";
+  if (feat === "port") {
+    // Port patch is shared across ELFs — keep every "Edit game port" box in sync.
+    for (const x of current.targets) if (x.port) x.enable.port = cb.checked;
+    syncPortToggles();
+  } else {
+    t.enable[feat] = cb.checked;
+  }
+  syncPortField();
   refreshOutputs();
 });
+
+/** Reflect the shared enable.port state onto every rendered "Edit game port" box. */
+function syncPortToggles() {
+  targetsEl
+    .querySelectorAll<HTMLInputElement>('input[data-feat="port"]')
+    .forEach((box) => {
+      const t = current?.targets[Number(box.dataset.i)];
+      if (t) box.checked = t.enable.port;
+    });
+}
+
+/** The port field is unlocked only while at least one "Edit game port" is ticked. */
+function syncPortField() {
+  const on = !!current?.targets.some((t) => t.enable.port);
+  portInput.disabled = !on;
+  if (!on) portInput.classList.remove("bad");
+}
+
+/** Desired port from the field (1..65535), or null when locked/empty/invalid. */
+function desiredPort(): number | null {
+  if (portInput.disabled) return null;
+  const raw = portInput.value.trim();
+  if (raw === "") {
+    portInput.classList.remove("bad");
+    return null;
+  }
+  const v = parseInt(raw, 10);
+  const ok = Number.isFinite(v) && v >= 1 && v <= 65535;
+  portInput.classList.toggle("bad", !ok);
+  return ok ? v : null;
+}
 
 function refreshOutputs() {
   if (!current) return;
   const title = titleInput.value || current.serial;
-  chtEl.textContent = buildCht(current.serial, title, current.targets);
+  const port = desiredPort();
+  chtEl.textContent = buildCht(current.serial, title, current.targets, port);
 
-  pnachFiles = buildPnach(current.serial, current.targets);
+  pnachFiles = buildPnach(current.serial, current.targets, port);
   if (pnachFiles.length === 0) {
     pnachEl.innerHTML = `<p class="note">No patches found.</p>`;
     return;
@@ -121,6 +178,7 @@ function refreshOutputs() {
 }
 
 titleInput.addEventListener("input", refreshOutputs);
+portInput.addEventListener("input", refreshOutputs);
 
 async function handleFile(file: File) {
   resultEl.hidden = true;
