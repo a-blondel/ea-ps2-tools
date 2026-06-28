@@ -14,11 +14,16 @@ const titleInput = $<HTMLInputElement>("title");
 const serialEl = $<HTMLElement>("serial");
 const portField = $<HTMLLabelElement>("port-field");
 const portInput = $<HTMLInputElement>("port");
+const domainField = $<HTMLLabelElement>("domain-field");
+const domainInput = $<HTMLInputElement>("domain");
 const warningsEl = $<HTMLDivElement>("warnings");
 const targetsEl = $<HTMLDivElement>("targets");
 const chtNameEl = $<HTMLElement>("cht-name");
 const chtEl = $<HTMLPreElement>("cht");
 const pnachEl = $<HTMLDivElement>("pnach");
+
+type Feat = "dnas" | "ssl" | "port" | "domain";
+const SHARED: Feat[] = ["port", "domain"]; // one edit field drives every ELF
 
 let current: GameAnalysis | null = null;
 let pnachFiles: PnachFile[] = [];
@@ -51,13 +56,21 @@ function targetRow(t: ElfTarget, i: number): string {
       ? `${hex8(t.port.sites[0]!)} <span class="k">= ${t.port.value} (data word)</span>`
       : `${t.port.sites.map((a) => hex8(a)).join(", ")} <span class="k">(connect rewrite)</span>`
     : `<span class="miss">not found</span>`;
+  const domain = t.domain
+    ? `${t.domain.host} <span class="k">(${t.domain.sites.length}×, ${t.domain.capacity} B max)</span>`
+    : `<span class="miss">not found</span>`;
   const crc = t.crc !== undefined ? hex8(t.crc) : "—";
   const extra =
     a.candidates.length > 1
       ? `<div class="k">${a.candidates.length} pattern matches; chose the DNASSKIP-anchored one</div>`
       : "";
-  const labels = { dnas: "DNAS bypass", ssl: "SSL bypass", port: "Edit game port" };
-  const chk = (feat: "dnas" | "ssl" | "port", found: boolean) =>
+  const labels = {
+    dnas: "DNAS bypass",
+    ssl: "SSL bypass",
+    port: "Edit game port",
+    domain: "Edit game domain",
+  };
+  const chk = (feat: Feat, found: boolean) =>
     `<label class="toggle">
         <input type="checkbox" data-feat="${feat}" data-i="${i}"${
           t.enable[feat] && found ? " checked" : ""
@@ -66,12 +79,13 @@ function targetRow(t: ElfTarget, i: number): string {
       </label>`;
   return `<div class="target">
       <h3>${t.label}</h3>
-      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}${chk("port", !!t.port)}</div>
+      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}${chk("port", !!t.port)}${chk("domain", !!t.domain)}</div>
       <div class="grid">
         <span class="k">DNAS BNE</span><span>${bne}</span>
         <span class="k">Hook (9x)</span><span>${hook}</span>
         <span class="k">SSL site</span><span>${ssl}</span>
         <span class="k">Game port</span><span>${port}</span>
+        <span class="k">EA domain</span><span>${domain}</span>
         <span class="k">ELF CRC</span><span>${crc}</span>
       </div>${extra}
     </div>`;
@@ -86,7 +100,15 @@ function render(game: GameAnalysis) {
   portInput.value = game.port !== null ? String(game.port) : "";
   portInput.placeholder = "e.g. 40000";
   portInput.classList.remove("bad");
-  syncPortField(); // locked until an "Edit game port" box is ticked
+
+  const hasDomain = game.targets.some((t) => t.domain);
+  domainField.hidden = !hasDomain;
+  domainInput.value = "eahub.eu"; // default replacement; original host shown per ELF
+  domainInput.placeholder = "eahub.eu";
+  domainInput.classList.remove("bad");
+
+  syncSharedField("port"); // both locked until their "Edit …" box is ticked
+  syncSharedField("domain");
   chtNameEl.textContent = chtFilename(game.serial);
 
   if (game.warnings.length) {
@@ -104,38 +126,47 @@ function render(game: GameAnalysis) {
   resultEl.hidden = false;
 }
 
+/** Whether a target carries the analysis a feature needs. */
+function featAvail(t: ElfTarget, feat: Feat): boolean {
+  return feat === "port" ? !!t.port : feat === "domain" ? !!t.domain : feat === "ssl" ? !!t.ssl.port : !!t.dnas.bne;
+}
+
 targetsEl.addEventListener("change", (e) => {
   const cb = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-feat]");
   if (!cb || !current) return;
   const t = current.targets[Number(cb.dataset.i)];
   if (!t) return;
-  const feat = cb.dataset.feat as "dnas" | "ssl" | "port";
-  if (feat === "port") {
-    // Port patch is shared across ELFs — keep every "Edit game port" box in sync.
-    for (const x of current.targets) if (x.port) x.enable.port = cb.checked;
-    syncPortToggles();
+  const feat = cb.dataset.feat as Feat;
+  if (SHARED.includes(feat)) {
+    // Port/domain patches are shared across ELFs — keep every box in sync.
+    for (const x of current.targets) if (featAvail(x, feat)) x.enable[feat] = cb.checked;
+    syncSharedToggles(feat);
   } else {
     t.enable[feat] = cb.checked;
   }
-  syncPortField();
+  syncSharedField(feat);
   refreshOutputs();
 });
 
-/** Reflect the shared enable.port state onto every rendered "Edit game port" box. */
-function syncPortToggles() {
+const sharedInput = (feat: Feat): HTMLInputElement => (feat === "port" ? portInput : domainInput);
+
+/** Reflect a shared enable.<feat> state onto every rendered toggle for it. */
+function syncSharedToggles(feat: Feat) {
   targetsEl
-    .querySelectorAll<HTMLInputElement>('input[data-feat="port"]')
+    .querySelectorAll<HTMLInputElement>(`input[data-feat="${feat}"]`)
     .forEach((box) => {
       const t = current?.targets[Number(box.dataset.i)];
-      if (t) box.checked = t.enable.port;
+      if (t) box.checked = t.enable[feat];
     });
 }
 
-/** The port field is unlocked only while at least one "Edit game port" is ticked. */
-function syncPortField() {
-  const on = !!current?.targets.some((t) => t.enable.port);
-  portInput.disabled = !on;
-  if (!on) portInput.classList.remove("bad");
+/** A shared edit field is unlocked only while at least one of its boxes is ticked. */
+function syncSharedField(feat: Feat) {
+  if (!SHARED.includes(feat)) return;
+  const input = sharedInput(feat);
+  const on = !!current?.targets.some((t) => t.enable[feat]);
+  input.disabled = !on;
+  if (!on) input.classList.remove("bad");
 }
 
 /** Desired port from the field (1..65535), or null when locked/empty/invalid. */
@@ -152,13 +183,32 @@ function desiredPort(): number | null {
   return ok ? v : null;
 }
 
+/** Desired domain from the field, or null when locked/empty/invalid (too long
+ *  for any enabled ELF, or not a valid hostname). */
+function desiredDomain(): string | null {
+  if (domainInput.disabled) return null;
+  const raw = domainInput.value.trim();
+  if (raw === "") {
+    domainInput.classList.remove("bad");
+    return null;
+  }
+  const caps = (current?.targets ?? [])
+    .filter((t) => t.enable.domain && t.domain)
+    .map((t) => t.domain!.capacity);
+  const minCap = caps.length ? Math.min(...caps) : Infinity;
+  const ok = /^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(raw) && raw.length + 1 <= minCap;
+  domainInput.classList.toggle("bad", !ok);
+  return ok ? raw : null;
+}
+
 function refreshOutputs() {
   if (!current) return;
   const title = titleInput.value || current.serial;
   const port = desiredPort();
-  chtEl.textContent = buildCht(current.serial, title, current.targets, port);
+  const domain = desiredDomain();
+  chtEl.textContent = buildCht(current.serial, title, current.targets, port, domain);
 
-  pnachFiles = buildPnach(current.serial, current.targets, port);
+  pnachFiles = buildPnach(current.serial, current.targets, port, domain);
   if (pnachFiles.length === 0) {
     pnachEl.innerHTML = `<p class="note">No patches found.</p>`;
     return;
@@ -181,6 +231,7 @@ function refreshOutputs() {
 
 titleInput.addEventListener("input", refreshOutputs);
 portInput.addEventListener("input", refreshOutputs);
+domainInput.addEventListener("input", refreshOutputs);
 
 async function handleFile(file: File) {
   resultEl.hidden = true;

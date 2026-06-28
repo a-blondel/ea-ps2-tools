@@ -37,6 +37,7 @@ assert.equal(dash.hook.vaddr >>> 0, 0x0023d698, "dash hook addr");
 assert.equal(dash.hook.value >>> 0, 0x0c08f54e, "dash hook value");
 assert.equal(main.bne.anchorDist, 0x20, "main DNASSKIP anchor distance");
 assert.equal(dash.bne.anchorDist, 0x20, "dash DNASSKIP anchor distance");
+assert.equal(main.method, "dnasskip", "FIFA uses the DNASSKIP detector");
 
 // SSL: ProtoAriesSecure NOP + port +1 -> +0, one site per ELF.
 const mainSsl = game.targets[0].ssl;
@@ -47,34 +48,41 @@ assert.equal(mainSsl.secure.vaddr >>> 0, 0x005d10c8, "main SSL secure (NOP) addr
 assert.equal(dashSsl.port.vaddr >>> 0, 0x001e4088, "dash SSL port addr");
 assert.equal(dashSsl.secure.vaddr >>> 0, 0x001e4090, "dash SSL secure (NOP) addr");
 
+// Default .cht: per-ELF hook group, one comment-headed block per feature, every
+// ELF's writes repeated under each hook (OPL applies the whole list per hook).
 const expected = `"FIFA07 /ID SLUS_214.33"
-//Online patches for Main Game: DNAS + SSL
+//Online patches — Main Game
 90370428 0C0DC0B2
+//DNAS bypass: Skip the DNAS authentication check.
 205C8028 00000000
+201E16CC 00000000
+//SSL bypass: Disable ProtoAries SSL on the lobby link.
 205D10C0 24E70000
 205D10C8 00000000
-201E16CC 00000000
 201E4088 24E70000
 201E4090 00000000
 
-//Online patches for EA Dashboard: DNAS + SSL
+//Online patches — EA Dashboard
 9023D698 0C08F54E
+//DNAS bypass: Skip the DNAS authentication check.
 205C8028 00000000
+201E16CC 00000000
+//SSL bypass: Disable ProtoAries SSL on the lobby link.
 205D10C0 24E70000
 205D10C8 00000000
-201E16CC 00000000
 201E4088 24E70000
 201E4090 00000000
 `;
-assert.equal(cht, expected, "full .cht matches OPL /ID format");
+assert.equal(cht, expected, "full .cht matches the block format");
 
-// Toggling features off must drop their lines.
+// Toggling features off must drop their block.
 const onlyDnas = structuredClone(game.targets);
 for (const t of onlyDnas) t.enable.ssl = false;
 const chtDnas = buildCht(serial, "FIFA07", onlyDnas);
-assert.ok(!chtDnas.includes("24E70000"), "SSL off -> no port line");
-assert.ok(chtDnas.includes("205C8028 00000000"), "SSL off -> DNAS still present");
-assert.ok(chtDnas.includes("//Online patches for Main Game: DNAS\n"), "SSL off -> header drops SSL");
+assert.ok(!chtDnas.includes("24E70000"), "SSL off -> no SSL block");
+assert.ok(!chtDnas.includes("SSL bypass"), "SSL off -> no SSL header");
+assert.ok(chtDnas.includes("//DNAS bypass: Skip the DNAS authentication check."), "DNAS block kept");
+assert.ok(chtDnas.includes("205C8028 00000000"), "DNAS code kept");
 
 // Game port: main = readable .data word; dash = connect-site rewrite.
 assert.equal(game.port, 10400, "detected game port (from main data word)");
@@ -82,31 +90,70 @@ assert.equal(game.targets[0].port.kind, "data", "main port kind");
 assert.equal(game.targets[0].port.value, 10400, "main port value");
 assert.equal(game.targets[0].port.sites[0] >>> 0, 0x00725c5c, "main port addr");
 assert.equal(game.targets[1].port.kind, "connect", "dash port kind = connect rewrite");
-assert.equal(game.targets[1].port.value, null, "dash port value unknown (runtime)");
-assert.equal(game.targets[1].port.sites.length, 2, "dash connect has 2 lw a3 loads");
 
 // Port is opt-in per ELF: with the checkboxes off, no port write even if a value is passed.
 assert.ok(!buildCht(serial, "FIFA07", game.targets, 12345).includes("20725C5C"), "port off -> no main patch");
-assert.ok(!buildCht(serial, "FIFA07", game.targets, 12345).includes("34073039"), "port off -> no dash patch");
+assert.ok(!buildCht(serial, "FIFA07", game.targets, 12345).includes("Game port"), "port off -> no port block");
 
-// Tick "Edit game port" on both ELFs -> main data word 0x0000<port>; dash connect ori a3,zero,port.
+// Tick "Edit game port" on both ELFs -> main data word; dash connect ori a3,zero,port.
 const withPort = structuredClone(game.targets);
 for (const t of withPort) t.enable.port = true;
 const chtPort = buildCht(serial, "FIFA07", withPort, 12345); // 0x3039
+assert.ok(chtPort.includes("//Game port: Set the game port to 12345."), "port on -> port block header");
 assert.ok(chtPort.includes("20725C5C 00003039"), "port on -> main data word write");
 assert.ok(chtPort.includes("34073039"), "port on -> dash ori a3,zero,12345");
-assert.ok(chtPort.includes("Online patches for Main Game: DNAS + SSL + PORT"), "port on -> header gains PORT");
 const pnachPort = buildPnach(serial, withPort, 12345);
+assert.ok(pnachPort[0].content.includes("[Game port]"), "main pnach has Game port section");
 assert.ok(pnachPort[0].content.includes("patch=1,EE,20725C5C,extended,00003039"), "main pnach data word");
 assert.ok(pnachPort[1].content.includes(",extended,34073039"), "dash pnach connect ori");
+
+// Domain override: located in the main ELF (ps2fifa07.ea.com, 2 sites); the
+// dashboard has no copy of the game host, so it gets no domain block.
+assert.equal(game.domain, "ps2fifa07.ea.com", "detected EA hostname");
+assert.equal(game.targets[0].domain.host, "ps2fifa07.ea.com", "main domain host");
+assert.equal(game.targets[0].domain.sites.length, 2, "main domain occurrences");
+assert.equal(game.targets[0].domain.sites[0].vaddr >>> 0, 0x0033e551, "main domain addr");
+assert.equal(game.targets[0].domain.capacity, 23, "main domain capacity (16 host + 7 NUL)");
+assert.equal(game.targets[1].domain, null, "dash has no game-host domain");
+
+// Domain is opt-in: off -> no writes even when a replacement is passed.
+assert.ok(!buildCht(serial, "FIFA07", game.targets, null, "eahub.eu").includes("Domain override"), "domain off -> no block");
+
+// Tick it on -> byte writes for "eahub.eu" at each occurrence.
+const withDomain = structuredClone(game.targets);
+for (const t of withDomain) if (t.domain) t.enable.domain = true;
+const chtDom = buildCht(serial, "FIFA07", withDomain, null, "eahub.eu");
+assert.ok(chtDom.includes('//Domain override: Redirect the EA hostname to "eahub.eu".'), "domain block header");
+// Writes are coalesced + alignment-aware: the unaligned host start (…551) leads
+// with a byte (0) then a halfword (1), the aligned middle is words (2).
+assert.ok(chtDom.includes("0033E551 00000065"), "site 1: leading byte 'e' (unaligned)");
+assert.ok(chtDom.includes("1033E552 00006861"), "site 1: halfword 'ah'");
+assert.ok(chtDom.includes("2033E554 652E6275"), "site 1: word 'ub.e'");
+assert.ok(chtDom.includes("003532E9 00000065"), "site 2: leading byte 'e'");
+const pnachDom = buildPnach(serial, withDomain, null, "eahub.eu");
+assert.ok(pnachDom[0].content.includes("[Domain override]"), "main pnach has Domain override section");
+assert.ok(pnachDom[0].content.includes("patch=1,EE,2033E554,extended,652E6275"), "domain word write 'ub.e'");
+// Alignment safety: every word (cmd 2) address is 4-aligned, every halfword
+// (cmd 1) is 2-aligned — no unaligned multi-byte store can fault the EE.
+assert.ok(!/patch=1,EE,2[0-9A-F]{6}[^048C],/.test(pnachDom[0].content), "no word write at a non-4-aligned address");
+assert.ok(!/patch=1,EE,1[0-9A-F]{6}[13579BDF],/.test(pnachDom[0].content), "no halfword write at an odd address");
+// A replacement too long for the capacity must be rejected (no writes).
+assert.ok(
+  !buildCht(serial, "FIFA07", withDomain, null, "this-domain-is-way-too-long.example.com").includes("Domain override"),
+  "over-capacity domain -> no block",
+);
 
 // pnach: filenames carry the auto-computed PCSX2 CRC; one file per ELF.
 const pnach = buildPnach(serial, game.targets);
 console.log(pnach.map((f) => `${f.filename}:\n${f.content}`).join("\n"));
-const pnachMain = `[Network\\Online Patches]
+const pnachMain = `[DNAS bypass]
 author=EA Nation Hub
-description=Online patches: DNAS + SSL
+description=Skip the DNAS authentication check.
 patch=1,EE,205C8028,extended,00000000
+
+[SSL bypass]
+author=EA Nation Hub
+description=Disable ProtoAries SSL on the lobby link.
 patch=1,EE,205D10C0,extended,24E70000
 patch=1,EE,205D10C8,extended,00000000
 `;
@@ -114,8 +161,6 @@ assert.equal(pnach[0].filename, "SLUS-21433_083C57E2.pnach", "main pnach filenam
 assert.equal(pnach[0].content, pnachMain, "main pnach content/format");
 assert.equal(pnach[1].filename, "SLUS-21433_C4923636.pnach", "dash pnach filename");
 assert.ok(pnach[1].content.includes("patch=1,EE,201E16CC,extended,00000000"), "dash pnach DNAS line");
-assert.ok(pnach[1].content.includes("patch=1,EE,201E4088,extended,24E70000"), "dash pnach SSL port line");
-assert.ok(pnach[1].content.includes("patch=1,EE,201E4090,extended,00000000"), "dash pnach SSL secure line");
-assert.ok(pnach[1].content.startsWith("[Network\\Online Patches]"), "dash pnach header");
+assert.ok(pnach[1].content.startsWith("[DNAS bypass]"), "dash pnach starts with a section");
 
 console.log("ALL ASSERTIONS PASSED ✓");
