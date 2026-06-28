@@ -10,6 +10,10 @@ patches for EA PlayStation 2 online titles straight from a game ISO:
 The ISO never leaves your machine: only the directory tree and the two target
 ELFs (a few MB) are read, via `File.slice` — never the whole multi-GB image.
 
+## Link
+
+https://a-blondel.github.io/ea-ps2-tools/
+
 ## How it works
 
 DNAS verification compiles to a `JAL <dnas_fn>` followed by a

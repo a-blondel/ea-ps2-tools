@@ -32,8 +32,10 @@ function setStatus(msg: string, error = false) {
 function targetRow(t: ElfTarget, i: number): string {
   const a = t.dnas;
   const bne = a.bne
-    ? `${hex8(a.bne.vaddr)} <span class="k">(orig ${hex8(a.bne.original)}, anchor ${
-        a.bne.anchorDist === null ? "none" : "0x" + a.bne.anchorDist.toString(16)
+    ? `${hex8(a.bne.vaddr)} <span class="k">(orig ${hex8(a.bne.original)}, ${
+        a.method === "dirtydnas"
+          ? "DirtyDnas reloc"
+          : "anchor " + (a.bne.anchorDist === null ? "none" : "0x" + a.bne.anchorDist.toString(16))
       })</span>`
     : `<span class="miss">not found</span>`;
   const hook = a.hook
