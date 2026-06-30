@@ -1,7 +1,10 @@
 import "./style.css";
-import { Iso, type IsoFile } from "./iso9660.js";
+import { Iso } from "./iso9660.js";
+import { Elf } from "./elf.js";
 import { parseSerial, analyzeGame, type GameAnalysis } from "./analyze.js";
-import { buildCht, buildPnach, chtFilename, type ElfTarget, type PnachFile } from "./cheats.js";
+import { buildCht, buildPnach, chtFilename, targetWrites, type ElfTarget, type PnachFile } from "./cheats.js";
+import { buildIsoWrites, type IsoPatchTarget } from "./isopatch.js";
+import { applyPatchesToChunk } from "./isostream.js";
 import { hex8 } from "./bytes.js";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -21,11 +24,17 @@ const targetsEl = $<HTMLDivElement>("targets");
 const chtNameEl = $<HTMLElement>("cht-name");
 const chtEl = $<HTMLPreElement>("cht");
 const pnachEl = $<HTMLDivElement>("pnach");
+const patchBtn = $<HTMLButtonElement>("patch-iso");
+const patchStatusEl = $<HTMLParagraphElement>("patch-status");
+const patchProgressEl = $<HTMLProgressElement>("patch-progress");
+const crswapHelpEl = $<HTMLDivElement>("crswap-help");
 
 type Feat = "dnas" | "ssl" | "port" | "domain";
 const SHARED: Feat[] = ["port", "domain"]; // one edit field drives every ELF
 
 let current: GameAnalysis | null = null;
+let currentFile: File | null = null; // source ISO, kept so we can copy + patch it
+let currentLoaded: LoadedIso | null = null; // its walked ELFs (lba + bytes)
 let pnachFiles: PnachFile[] = [];
 
 function setStatus(msg: string, error = false) {
@@ -233,38 +242,224 @@ titleInput.addEventListener("input", refreshOutputs);
 portInput.addEventListener("input", refreshOutputs);
 domainInput.addEventListener("input", refreshOutputs);
 
+// One ELF pulled out of an ISO: its bytes plus the sector (lba) they start at,
+// so the in-place patcher can turn a file offset into an absolute ISO offset.
+interface LoadedElf {
+  name: string;
+  path: string;
+  lba: number;
+  data: Uint8Array;
+}
+interface LoadedIso {
+  serial: string;
+  elfs: LoadedElf[]; // the main ELF and EA_DASH.ELF, if present
+}
+
+/** Walk an ISO, read its BOOT2 serial, and pull out the main + dashboard ELFs.
+ *  Shared by the analysis flow and the in-place patcher. */
+async function loadIso(file: File): Promise<LoadedIso> {
+  const iso = new Iso(file);
+  const files = await iso.listFiles();
+
+  const cnf = files.find((f) => f.name.toUpperCase() === "SYSTEM.CNF");
+  if (!cnf) throw new Error("SYSTEM.CNF not found — is this a PS2 ISO?");
+  const serial = parseSerial(new TextDecoder().decode(await iso.readFileData(cnf)));
+  if (!serial) throw new Error("Could not read BOOT2 serial from SYSTEM.CNF.");
+
+  const wanted = files.filter(
+    (f) => f.name.toUpperCase() === serial.toUpperCase() || f.name.toUpperCase() === "EA_DASH.ELF",
+  );
+  const elfs: LoadedElf[] = [];
+  for (const f of wanted) {
+    elfs.push({ name: f.name, path: f.path, lba: f.lba, data: await iso.readFileData(f) });
+  }
+  return { serial, elfs };
+}
+
+/** The loaded ELF backing a target (main vs dashboard), matched by label. */
+function elfForTarget(t: ElfTarget, loaded: LoadedIso): LoadedElf | null {
+  const want = t.label === "EA Dashboard" ? "EA_DASH.ELF" : loaded.serial.toUpperCase();
+  return loaded.elfs.find((e) => e.name.toUpperCase() === want) ?? null;
+}
+
 async function handleFile(file: File) {
   resultEl.hidden = true;
   titleInput.value = "";
   setStatus(`Reading ${file.name} …`);
   try {
-    const iso = new Iso(file);
-    const files = await iso.listFiles();
-
-    const cnf = files.find((f) => f.name.toUpperCase() === "SYSTEM.CNF");
-    if (!cnf) throw new Error("SYSTEM.CNF not found — is this a PS2 ISO?");
-    const serial = parseSerial(new TextDecoder().decode(await iso.readFileData(cnf)));
-    if (!serial) throw new Error("Could not read BOOT2 serial from SYSTEM.CNF.");
-
-    const wanted = files.filter(
-      (f) =>
-        f.name.toUpperCase() === serial.toUpperCase() ||
-        f.name.toUpperCase() === "EA_DASH.ELF",
-    );
-    setStatus(`Extracting ${wanted.map((f) => f.name).join(", ")} …`);
-
-    const blobs = [];
-    for (const f of wanted) {
-      blobs.push({ name: f.name, path: f.path, data: await iso.readFileData(f as IsoFile) });
-    }
-
-    const game = analyzeGame(serial, blobs);
-    setStatus(`Done — ${serial}.`);
+    const loaded = await loadIso(file);
+    setStatus(`Extracting ${loaded.elfs.map((e) => e.name).join(", ")} …`);
+    const blobs = loaded.elfs.map((e) => ({ name: e.name, path: e.path, data: e.data }));
+    const game = analyzeGame(loaded.serial, blobs);
+    currentFile = file;
+    currentLoaded = loaded;
+    setStatus(`Done — ${loaded.serial}.`);
     render(game);
   } catch (e) {
     setStatus((e as Error).message, true);
   }
 }
+
+function setPatchStatus(msg: string, error = false) {
+  patchStatusEl.hidden = false;
+  patchStatusEl.textContent = msg;
+  patchStatusEl.classList.toggle("error", error);
+}
+
+/** Show the copy progress (0..1), or hide the bar when passed null. */
+function setPatchProgress(frac: number | null) {
+  if (frac === null) {
+    patchProgressEl.hidden = true;
+    return;
+  }
+  patchProgressEl.hidden = false;
+  patchProgressEl.value = frac;
+}
+
+// A File System Access save handle, minimally typed (Chrome/Edge only).
+interface SaveHandle {
+  createWritable(): Promise<{
+    write(data: Blob | Uint8Array): Promise<void>;
+    close(): Promise<void>;
+    abort?(reason?: unknown): Promise<void>;
+  }>;
+}
+
+/**
+ * Ask the user where to save, NOW — must run inside the click handler because
+ * showSaveFilePicker requires a fresh user gesture and can't be called after the
+ * minutes-long build. Returns the handle, or null on Firefox (no picker → we'll
+ * fall back to a blob-URL download), or "cancel" if the user dismissed it.
+ */
+async function pickSaveHandle(suggestedName: string): Promise<SaveHandle | null | "cancel"> {
+  const picker = (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker as
+    | ((opts: object) => Promise<SaveHandle>)
+    | undefined;
+  if (!picker) return null;
+  try {
+    return await picker({
+      suggestedName,
+      types: [{ description: "PS2 ISO", accept: { "application/octet-stream": [".iso"] } }],
+    });
+  } catch (e) {
+    if ((e as DOMException)?.name === "AbortError") return "cancel";
+    throw e;
+  }
+}
+
+/**
+ * Save a patched copy of the loaded ISO. We assemble the WHOLE patched image
+ * first — reading the source in chunks, overlaying the few patch bytes inline,
+ * and collecting each chunk as a browser-managed Blob (which the browser spills
+ * to disk, so the JS heap stays small) — then write the finished file out.
+ * Building it fully before saving is what killed the earlier corruption: a live
+ * streamed download let the user confirm the save dialog mid-copy and truncate
+ * the file. On Chrome/Edge we ask where to save up front (their blob-URL
+ * downloads are capped at ~2 GB and fail with "network error") then write the
+ * complete blob there; Firefox just downloads the finished blob URL. The
+ * original disc is never touched. Works under `vite dev` too (no service worker).
+ */
+async function patchIso() {
+  if (!current || !currentFile || !currentLoaded) return;
+
+  // Build the patch byte-writes from the current toggles + the loaded ELFs.
+  const port = desiredPort();
+  const domain = desiredDomain();
+  const targets: IsoPatchTarget[] = [];
+  for (const t of current.targets) {
+    const e = elfForTarget(t, currentLoaded);
+    if (!e) continue;
+    targets.push({ elf: new Elf(e.data), lba: e.lba, writes: targetWrites(t, port, domain) });
+  }
+  const { writes, warnings } = buildIsoWrites(targets);
+  if (writes.length === 0) {
+    setPatchStatus("No patches are enabled — tick at least one feature first.", true);
+    return;
+  }
+
+  const src = currentFile;
+  const outName = src.name.replace(/(\.[^./\\]+)?$/, "") + "-patched.iso";
+
+  // Pick the destination NOW, while the click gesture is still valid — the long
+  // build below would invalidate the gesture showSaveFilePicker requires.
+  let handle: SaveHandle | null;
+  try {
+    const picked = await pickSaveHandle(outName);
+    if (picked === "cancel") return;
+    handle = picked;
+  } catch (e) {
+    setPatchStatus((e as Error).message, true);
+    return;
+  }
+
+  const sorted = [...writes].sort((a, b) => a.offset - b.offset);
+  const CHUNK = 8 * 1024 * 1024;
+  patchBtn.disabled = true;
+  crswapHelpEl.hidden = true;
+  try {
+    if (handle) {
+      // Chrome/Edge: stream the source straight into the picked file, patching
+      // inline. No giant blob — that dodges the ~2 GB blob-URL cap and Chrome's
+      // blob-storage limits. Destination was picked up front, so nothing races.
+      setPatchStatus("Saving … 0%");
+      const writable = await handle.createWritable();
+      try {
+        let pos = 0;
+        while (pos < src.size) {
+          const end = Math.min(pos + CHUNK, src.size);
+          const chunk = new Uint8Array(await src.slice(pos, end).arrayBuffer());
+          applyPatchesToChunk(chunk, pos, sorted);
+          await writable.write(chunk);
+          pos = end;
+          setPatchProgress(pos / src.size);
+          setPatchStatus(`Saving … ${Math.floor((pos / src.size) * 100)}%`);
+        }
+        await writable.close(); // only on success — closing an errored stream masks the real error
+      } catch (err) {
+        await writable.abort?.(err).catch(() => {});
+        throw err;
+      }
+    } else {
+      // Firefox: build the whole patched image as a (disk-backed) Blob, then a
+      // blob-URL download — Firefox handles multi-GB blobs fine and has no picker.
+      setPatchStatus("Building patched ISO … 0%");
+      const parts: Blob[] = [];
+      let pos = 0;
+      while (pos < src.size) {
+        const end = Math.min(pos + CHUNK, src.size);
+        const chunk = new Uint8Array(await src.slice(pos, end).arrayBuffer());
+        applyPatchesToChunk(chunk, pos, sorted);
+        parts.push(new Blob([chunk]));
+        pos = end;
+        setPatchProgress(pos / src.size);
+        setPatchStatus(`Building patched ISO … ${Math.floor((pos / src.size) * 100)}%`);
+        await Promise.resolve(); // yield so the progress bar repaints
+      }
+      download(outName, new Blob(parts, { type: "application/octet-stream" }));
+    }
+
+    setPatchProgress(null);
+    if (warnings.length) console.warn("ISO patch — skipped writes:", warnings);
+    const skipped = warnings.length ? ` (${warnings.length} skipped — see console)` : "";
+    setPatchStatus(`Done — saved ${outName} (${writes.length} change(s))${skipped}.`);
+  } catch (e) {
+    setPatchProgress(null);
+    // Chrome's File System Access write can fail at commit on Windows when an
+    // antivirus/indexer touches the temp file (InvalidStateError) — but the full
+    // patched ISO has already been written as the .crswap file, so show the user
+    // how to finish it by hand. (Firefox has no handle and won't hit this.)
+    if (handle) {
+      patchStatusEl.hidden = true; // the crswap-help block below says it all
+      crswapHelpEl.hidden = false;
+    } else {
+      setPatchStatus((e as Error).message, true);
+    }
+  } finally {
+    patchBtn.disabled = false;
+  }
+}
+
+patchBtn.addEventListener("click", () => void patchIso());
 
 fileInput.addEventListener("change", () => {
   const f = fileInput.files?.[0];
@@ -283,13 +478,16 @@ drop.addEventListener("drop", (e) => {
   if (f) void handleFile(f);
 });
 
-function download(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+function download(name: string, content: string | Blob) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
-  URL.revokeObjectURL(url);
+  // Keep the object URL alive long enough for the browser to start reading the
+  // blob; revoking it immediately can abort a large (multi-GB) download.
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
 }
 
 $<HTMLButtonElement>("dl-cht").addEventListener("click", () => {

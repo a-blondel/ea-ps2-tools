@@ -47,6 +47,31 @@
         <div id="warnings" class="warnings" hidden></div>
         <div id="targets" class="targets"></div>
 
+        <div id="isopatch" class="output">
+          <div class="output-head">
+            <h2>Patched ISO</h2>
+            <div class="btns">
+              <button id="patch-iso" type="button" class="primary">Save patched copy…</button>
+            </div>
+          </div>
+          <p class="note">
+            Builds the full patched ISO. Your original disc is left untouched.
+          </p>
+          <progress id="patch-progress" max="1" value="0" hidden></progress>
+          <p id="patch-status" class="status" hidden></p>
+          <div id="crswap-help" class="warnings" hidden>
+            <strong>Chrome couldn't finish writing the file — but the patched ISO is there. Finish it by hand:</strong>
+            <ol>
+              <li>Open the folder where you chose to save the ISO.</li>
+              <li>You'll see two files: an empty <code>NAME.iso</code> and a full-size
+                <code>NAME.iso.crswap</code> — the <code>.crswap</code> one <em>is</em> your patched disc.</li>
+              <li>Delete the empty <code>NAME.iso</code>.</li>
+              <li>Rename <code>NAME.iso.crswap</code> to <code>NAME.iso</code> (just remove the
+                <code>.crswap</code>). Done — that's your patched ISO.</li>
+            </ol>
+          </div>
+        </div>
+
         <div class="output">
           <div class="output-head">
             <h2>OPL cheat — <code id="cht-name"></code></h2>

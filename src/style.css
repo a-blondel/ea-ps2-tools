@@ -167,6 +167,7 @@ button.primary:hover { background: var(--accent-press); }
 details.output > summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
 .note { color: var(--muted); font-size: .82rem; }
 .note code, .sub code, footer code { font-family: var(--mono); color: var(--text); }
+#patch-progress { width: 100%; height: .5rem; margin: .4rem 0; }
 
 footer { margin-top: 48px; border-top: 1px solid var(--line); padding-top: 18px; }
 footer p { color: var(--muted); font-size: .84rem; margin: 0; }

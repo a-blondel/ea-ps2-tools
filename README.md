@@ -40,7 +40,7 @@ headers (not a hardcoded delta), so it stays correct across builds.
 ```sh
 npm install
 npm run dev       # local dev server
-npm run build     # -> dist/  (deployed to Pages by .github/workflows/deploy.yml)
+npm run build     # -> dist/  (deployed to Pages by .github/workflows/deploy.yml - or run locally with `python -m http.server 4179 --directory dist`)
 npm test          # validation tests (reads paths from .env)
 ```
 

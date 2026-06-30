@@ -20,7 +20,7 @@ export interface ElfTarget {
   enable: { dnas: boolean; ssl: boolean; port: boolean; domain: boolean }; // UI toggles
 }
 
-interface Write {
+export interface Write {
   addr: number;
   value: number;
   width?: 1 | 2 | 4; // bytes written (default 4 = word); 2 = halfword; 1 = byte
@@ -140,6 +140,16 @@ function targetBlocks(t: ElfTarget, port: number | null, domain: string | null):
     });
   }
   return blocks;
+}
+
+/**
+ * Every enabled write for one ELF, flattened across its feature blocks in
+ * display order. This is the same write list the .cht/.pnach emit as cheat
+ * codes; the in-place ISO patcher consumes it to seek + write the bytes
+ * directly (see isopatch.ts).
+ */
+export function targetWrites(t: ElfTarget, port: number | null = null, domain: string | null = null): Write[] {
+  return targetBlocks(t, port, domain).flatMap((b) => b.writes);
 }
 
 // Display order the merged .cht blocks keep, regardless of contributing ELF.
