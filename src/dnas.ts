@@ -52,11 +52,13 @@ export interface Hook {
 }
 
 export interface DnasAnalysis {
-  bne: BneCandidate | null; // chosen BNE (best-anchored, else only/first)
+  bne: BneCandidate | null; // chosen BNE/gate (best-anchored, else only/first)
   candidates: BneCandidate[]; // all matches, for transparency
   ambiguous: boolean; // multiple matches and none clearly anchored
   hook: Hook | null;
-  method: "dnasskip" | "dirtydnas" | null; // which detector found `bne`
+  method: "dnasskip" | "dirtydnas" | "sonygate" | null; // which detector found `bne`
+  gateValue?: number; // word to write over `bne` (default 0 = NOP; sony bgez gate = a `b`)
+  extraWrites?: { addr: number; value: number }[]; // secondary word writes (sony-gate busy-skip)
 }
 
 const DIRTYDNAS_SYM = ascii("DirtyDnasRelUpdt");
@@ -255,6 +257,113 @@ function dirtyDnasGate(elf: Elf, callFo: number, end: number): BneCandidate | nu
   return null;
 }
 
+// --- Sony DNAS main-ELF result gate ----------------------------------------
+//
+// Stock Sony DNAS titles (Burnout 3: Takedown = DNAS 2.8, Burnout Revenge =
+// DNAS 3.0) have no DNASSKIP/DirtyDnas check, but the MAIN ELF still consumes
+// the verdict: an async DNAS module is polled each frame and the game branches
+// on its result. Shape (all module-manager calls, so ABI-stable):
+//     jal   <ready?>                 ; module readiness
+//     <busy branch on v0 -> return>  ; while busy, return and poll again        (A)
+//     ...  jal <get-result setup> ; jal <get-result>
+//     lw    v?, off(sp)              ; the DNAS result code
+//     <sign branch on v?>            ; the gate                                  (B)
+//     ...  fail path formats an error + checks the retry codes -0x69/-0x269/-0x25b
+//
+// The retry-code triple is the stable, version-independent anchor for the poll
+// function. From it we locate the gate (B) and the busy branch (A) and emit two
+// static writes that force success on the first poll (validated live in PCSX2,
+// online-confirmed, on BOTH Burnout 3 and Burnout Revenge):
+//
+//   gate (B):  `bltz v?,fail`  (branch-if-neg to fail)      -> NOP (fall through to success)
+//              `bgez v?,succ`  (branch-if-nonneg to success)-> unconditional `b succ`
+//   busy (A):  `sltu v0,zero,v0` (2.8 idiom) -> `move v0,zero`
+//              `bnez v?,return`  (3.0 idiom) -> NOP
+//
+// The gate is emitted as `bne` with `gateValue` (0 for bltz, the `b` word for
+// bgez); the busy-skip as an extra word write. gateValue defaults to 0 for the
+// other methods (plain NOP), so the DNAS block is unchanged for them.
+const SLTU_V0_ZERO_V0 = 0x0002102b;
+const MOVE_V0_ZERO = 0x0000102d;
+// DNAS retry error codes, as `addiu rt,zero,imm` (li rt,imm) 16-bit immediates.
+const DNAS_RETRY_IMM = [0xff97 /* -0x69 */, 0xfd97 /* -0x269 */, 0xfda5 /* -0x25b */];
+
+/** True if `w` is `addiu rt,zero,imm` (li rt,imm) for the given 16-bit imm, any rt. */
+function isLiImm(w: number, imm: number): boolean {
+  return w >>> 26 === 0x09 && ((w >>> 21) & 0x1f) === 0 && (w & 0xffff) === imm;
+}
+
+interface SonyGate {
+  gate: BneCandidate; // the sign-branch (its original word in `.original`)
+  gateValue: number; // word to write over it: 0 (bltz) or the `b` word (bgez)
+  busy: { addr: number; value: number } | null; // busy-skip write, if recognised
+}
+
+function analyzeSonyGate(elf: Elf): SonyGate | null {
+  const seg = elf.codeSegment;
+  const end = seg.off + seg.filesz;
+
+  for (let fo = seg.off; fo + 4 <= end; fo += 4) {
+    // (1) anchor: the three DNAS retry codes clustered in a small window.
+    if (!isLiImm(elf.readU32(fo), DNAS_RETRY_IMM[2]!)) continue;
+    let a = false, b = false;
+    for (let g = fo - 0x30; g <= fo + 0x30; g += 4) {
+      if (g < seg.off || g + 4 > end) continue;
+      const w = elf.readU32(g);
+      if (isLiImm(w, DNAS_RETRY_IMM[0]!)) a = true;
+      if (isLiImm(w, DNAS_RETRY_IMM[1]!)) b = true;
+    }
+    if (!a || !b) continue;
+
+    // (2) gate = nearest preceding `lw v?,off(sp)` + `bltz|bgez` on the same reg.
+    let gate: BneCandidate | null = null;
+    let gateValue = 0;
+    for (let g = fo; g > fo - 0x160 && g >= seg.off; g -= 4) {
+      const w = elf.readU32(g);
+      if (w >>> 26 !== 0x23 || ((w >>> 21) & 0x1f) !== 29 /* sp */) continue;
+      const rt = (w >>> 16) & 0x1f;
+      const nx = elf.readU32(g + 4);
+      if (nx >>> 26 !== 0x01 || ((nx >>> 21) & 0x1f) !== rt) continue; // REGIMM, same reg
+      const kind = (nx >>> 16) & 0x1f; // 0 = bltz (fail), 1 = bgez (success)
+      const va = elf.fileToVaddr(g + 4);
+      if (va === null) break;
+      if (kind === 0) { gate = { vaddr: va, fileOff: g + 4, original: nx, anchorDist: null }; gateValue = 0; break; }
+      if (kind === 1) { gate = { vaddr: va, fileOff: g + 4, original: nx, anchorDist: null }; gateValue = (0x10000000 | (nx & 0xffff)) >>> 0; break; }
+    }
+    if (!gate) continue;
+
+    // (3) busy-skip, bounded to the poll function (nearest `addiu sp,sp,-X`).
+    let fstart = seg.off;
+    for (let g = gate.fileOff; g > gate.fileOff - 0x400 && g >= seg.off; g -= 4) {
+      const w = elf.readU32(g);
+      if ((w >>> 16) === 0x27bd && (w & 0x8000)) { fstart = g; break; } // addiu sp,sp,-imm
+    }
+    let busy: SonyGate["busy"] = null;
+    for (let g = fstart; g < gate.fileOff; g += 4) {
+      if (elf.readU32(g) === SLTU_V0_ZERO_V0) { // 2.8: sltu v0,zero,v0 -> move v0,zero
+        const va = elf.fileToVaddr(g);
+        if (va !== null) busy = { addr: va, value: MOVE_V0_ZERO };
+        break;
+      }
+    }
+    if (!busy) { // 3.0: bnez v?,<past the gate> -> NOP
+      for (let g = fstart; g < gate.fileOff; g += 4) {
+        const w = elf.readU32(g);
+        if (w >>> 26 !== 0x05 || ((w >>> 16) & 0x1f) !== 0) continue; // bnez rs,fwd
+        const tgt = g + 4 + (((w & 0xffff) << 16) >> 16) * 4;
+        if (tgt > gate.fileOff) {
+          const va = elf.fileToVaddr(g);
+          if (va !== null) busy = { addr: va, value: 0 };
+          break;
+        }
+      }
+    }
+
+    return { gate, gateValue, busy };
+  }
+  return null;
+}
+
 export function analyzeDnas(elf: Elf): DnasAnalysis {
   const strVaddrs = dnasskipStringVaddrs(elf);
   const refVaddrs = dnasskipRefVaddrs(elf, strVaddrs);
@@ -276,6 +385,8 @@ export function analyzeDnas(elf: Elf): DnasAnalysis {
   }
 
   let method: DnasAnalysis["method"] = bne ? "dnasskip" : null;
+  let gateValue: number | undefined;
+  let extraWrites: DnasAnalysis["extraWrites"];
   if (!bne) {
     // No inline DNASSKIP check — try the older DirtyDnas reloc engine.
     const gate = analyzeDirtyDnas(elf);
@@ -284,12 +395,24 @@ export function analyzeDnas(elf: Elf): DnasAnalysis {
       method = "dirtydnas";
     }
   }
+  if (!bne) {
+    // Still nothing — try the stock Sony DNAS main-ELF poll gate (2.8 + 3.0).
+    const sony = analyzeSonyGate(elf);
+    if (sony) {
+      bne = sony.gate;
+      method = "sonygate";
+      gateValue = sony.gateValue;
+      extraWrites = sony.busy ? [sony.busy] : undefined;
+    }
+  }
 
   return {
     bne,
-    candidates: method === "dirtydnas" && bne ? [bne] : candidates,
+    candidates: (method === "dirtydnas" || method === "sonygate") && bne ? [bne] : candidates,
     ambiguous,
     hook: findHook(elf),
     method,
+    gateValue,
+    extraWrites,
   };
 }

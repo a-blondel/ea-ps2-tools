@@ -46,6 +46,7 @@ const blobs = [];
 for (const f of wanted) blobs.push({ name: f.name, path: f.path, data: new Uint8Array(await iso.readFileData(f)) });
 
 const game = analyzeGame(serial, blobs);
+for (const t of game.targets) t.enable.ssl = true; // SSL defaults off now; test its output
 const cht = buildCht(serial, "FIFA07", game.targets);
 console.log("\n" + cht);
 assert.ok(cht.includes("90370428 0C0DC0B2"), "main hook from ISO");

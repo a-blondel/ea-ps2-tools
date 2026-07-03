@@ -3,8 +3,9 @@ import { Iso } from "./iso9660.js";
 import { Elf } from "./elf.js";
 import { parseSerial, analyzeGame, type GameAnalysis } from "./analyze.js";
 import { buildCht, buildPnach, chtFilename, targetWrites, type ElfTarget, type PnachFile } from "./cheats.js";
-import { buildIsoWrites, type IsoPatchTarget } from "./isopatch.js";
+import { buildIsoWrites, encodeLE, type IsoPatchTarget } from "./isopatch.js";
 import { applyPatchesToChunk } from "./isostream.js";
+import { scanIsoFilesForDnasModule, type DnasImgPatch } from "./dnasimg.js";
 import { hex8 } from "./bytes.js";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -28,6 +29,9 @@ const patchBtn = $<HTMLButtonElement>("patch-iso");
 const patchStatusEl = $<HTMLParagraphElement>("patch-status");
 const patchProgressEl = $<HTMLProgressElement>("patch-progress");
 const crswapHelpEl = $<HTMLDivElement>("crswap-help");
+const moduleDnasEl = $<HTMLDivElement>("module-dnas");
+const moduleDnasEnable = $<HTMLInputElement>("module-dnas-enable");
+const moduleDnasInfo = $<HTMLParagraphElement>("module-dnas-info");
 
 type Feat = "dnas" | "ssl" | "port" | "domain";
 const SHARED: Feat[] = ["port", "domain"]; // one edit field drives every ELF
@@ -35,7 +39,20 @@ const SHARED: Feat[] = ["port", "domain"]; // one edit field drives every ELF
 let current: GameAnalysis | null = null;
 let currentFile: File | null = null; // source ISO, kept so we can copy + patch it
 let currentLoaded: LoadedIso | null = null; // its walked ELFs (lba + bytes)
+let moduleDnas: DnasImgPatch | null = null; // Sony DNAS 2.x embedded-module patch, if any
 let pnachFiles: PnachFile[] = [];
+
+/** Cheap ASCII-substring probe over a byte buffer (for a DNAS marker in an ELF). */
+function hasBytes(buf: Uint8Array, ascii: string): boolean {
+  const n = new Uint8Array(ascii.length);
+  for (let i = 0; i < ascii.length; i++) n[i] = ascii.charCodeAt(i) & 0xff;
+  const last = buf.length - n.length;
+  outer: for (let i = 0; i <= last; i++) {
+    for (let j = 0; j < n.length; j++) if (buf[i + j] !== n[j]) continue outer;
+    return true;
+  }
+  return false;
+}
 
 function setStatus(msg: string, error = false) {
   statusEl.hidden = false;
@@ -49,6 +66,8 @@ function targetRow(t: ElfTarget, i: number): string {
     ? `${hex8(a.bne.vaddr)} <span class="k">(orig ${hex8(a.bne.original)}, ${
         a.method === "dirtydnas"
           ? "DirtyDnas reloc"
+          : a.method === "sonygate"
+          ? "Sony DNAS gate"
           : "anchor " + (a.bne.anchorDist === null ? "none" : "0x" + a.bne.anchorDist.toString(16))
       })</span>`
     : `<span class="miss">not found</span>`;
@@ -131,6 +150,16 @@ function render(game: GameAnalysis) {
   }
 
   targetsEl.innerHTML = game.targets.map(targetRow).join("");
+  if (moduleDnas) {
+    moduleDnasInfo.textContent =
+      `Found the DNAS auth accessor at disc offset ${hex8(moduleDnas.anchorOff)} ` +
+      `(${moduleDnas.writes.length} word rewrite${moduleDnas.writes.length === 1 ? "" : "s"} → always report authenticated). ` +
+      `Applied only to the patched ISO — it runs in an IOP module, so it can't be an OPL cheat or PCSX2 .pnach.`;
+    moduleDnasEnable.checked = true;
+    moduleDnasEl.hidden = false;
+  } else {
+    moduleDnasEl.hidden = true;
+  }
   refreshOutputs();
   resultEl.hidden = false;
 }
@@ -226,7 +255,7 @@ function refreshOutputs() {
     .map(
       (f, i) => `<div class="output">
         <div class="output-head">
-          <h2><code>${f.filename}</code></h2>
+          <h2><code>${f.filename}</code> <span class="pnach-for">${f.label}</span></h2>
           <div class="btns">
             <button type="button" data-copy="${i}">Copy</button>
             <button type="button" data-pnach="${i}" class="primary">Download</button>
@@ -253,6 +282,7 @@ interface LoadedElf {
 interface LoadedIso {
   serial: string;
   elfs: LoadedElf[]; // the main ELF and EA_DASH.ELF, if present
+  files: { name: string; lba: number; size: number }[]; // full directory, for the DNAS-module scan
 }
 
 /** Walk an ISO, read its BOOT2 serial, and pull out the main + dashboard ELFs.
@@ -273,7 +303,7 @@ async function loadIso(file: File): Promise<LoadedIso> {
   for (const f of wanted) {
     elfs.push({ name: f.name, path: f.path, lba: f.lba, data: await iso.readFileData(f) });
   }
-  return { serial, elfs };
+  return { serial, elfs, files: files.map((f) => ({ name: f.name, lba: f.lba, size: f.size })) };
 }
 
 /** The loaded ELF backing a target (main vs dashboard), matched by label. */
@@ -293,6 +323,25 @@ async function handleFile(file: File) {
     const game = analyzeGame(loaded.serial, blobs);
     currentFile = file;
     currentLoaded = loaded;
+
+    // Stock Sony DNAS 2.x titles have no in-ELF DNAS check — auth runs in a
+    // relocated IOP module embedded on the disc. Only when no EA in-ELF check
+    // was found AND the main ELF actually references DNAS do we pay for a
+    // full-image scan (so an unrelated ISO doesn't trigger a needless 2 GB read).
+    moduleDnas = null;
+    const mainElf = loaded.elfs.find((e) => e.name.toUpperCase() === loaded.serial.toUpperCase());
+    const refsDnas = mainElf ? hasBytes(mainElf.data, "DNAS") : false;
+    if (refsDnas && !game.targets.some((t) => t.dnas.bne)) {
+      setStatus("Scanning disc for an embedded DNAS module …");
+      const read = async (offset: number, len: number) =>
+        new Uint8Array(await file.slice(offset, offset + len).arrayBuffer());
+      // Triage files (*.IMG / embedded ELF) first so we rarely read the whole
+      // disc; fall back to a full scan for containers triage can't see.
+      moduleDnas = await scanIsoFilesForDnasModule(read, loaded.files, (frac) => {
+        setStatus(`Scanning disc for an embedded DNAS module … ${Math.floor(frac * 100)}%`);
+      }, file.size);
+    }
+
     setStatus(`Done — ${loaded.serial}.`);
     render(game);
   } catch (e) {
@@ -372,6 +421,13 @@ async function patchIso() {
     targets.push({ elf: new Elf(e.data), lba: e.lba, writes: targetWrites(t, port, domain) });
   }
   const { writes, warnings } = buildIsoWrites(targets);
+
+  // The Sony DNAS 2.x module patch is a raw disc edit (absolute offsets, no ELF
+  // mapping) — fold it into the same write list when found and enabled.
+  if (moduleDnas && moduleDnasEnable.checked) {
+    for (const w of moduleDnas.writes) writes.push({ offset: w.off, bytes: encodeLE(w.value, 4), vaddr: 0 });
+  }
+
   if (writes.length === 0) {
     setPatchStatus("No patches are enabled — tick at least one feature first.", true);
     return;

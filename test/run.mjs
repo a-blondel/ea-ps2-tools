@@ -21,6 +21,8 @@ const blobs = [
 ];
 
 const game = analyzeGame(serial, blobs);
+// SSL bypass now defaults OFF (product default); enable it here to test its output.
+for (const t of game.targets) t.enable.ssl = true;
 const cht = buildCht(serial, "FIFA07", game.targets);
 console.log(cht);
 console.log("warnings:", game.warnings);

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "build:test": "tsc -p tsconfig.tmp.json",
     "patch": "tsc -p tsconfig.tmp.json && node bin/patch-iso.mjs",
-    "test": "npm run build:test && node --env-file=.env test/run.mjs && node --env-file=.env test/sims.mjs && node --env-file=.env test/iso.mjs && node --env-file=.env test/isopatch.mjs && node test/isostream.mjs"
+    "test": "npm run build:test && node --env-file=.env test/run.mjs && node --env-file=.env test/sims.mjs && node --env-file=.env test/iso.mjs && node --env-file=.env test/isopatch.mjs && node test/isostream.mjs && node --env-file=.env test/dnasimg.mjs && node --env-file=.env test/gate.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

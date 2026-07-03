@@ -11,25 +11,33 @@
 //     --port <n>       also override the game port
 //     --domain <host>  also override the EA hostname
 //     --no-dnas        skip the DNAS bypass (on by default)
-//     --no-ssl         skip the SSL bypass (on by default)
+//     --ssl            also apply the SSL bypass (off by default)
+//     --cht            also write the OPL .cht next to the output
+//     --pnach          also write the PCSX2 .pnach file(s) next to the output
+//     --no-iso         don't build a patched ISO (use with --cht/--pnach)
 //     -h, --help
 
-import { openSync, readSync, fstatSync, closeSync, copyFileSync, writeSync } from "node:fs";
+import { openSync, readSync, fstatSync, closeSync, copyFileSync, writeSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, extname } from "node:path";
 import { Iso } from "../.tmp/iso9660.js";
 import { Elf } from "../.tmp/elf.js";
 import { parseSerial, analyzeGame } from "../.tmp/analyze.js";
-import { targetWrites } from "../.tmp/cheats.js";
-import { buildIsoWrites } from "../.tmp/isopatch.js";
+import { targetWrites, buildCht, buildPnach, chtFilename } from "../.tmp/cheats.js";
+import { buildIsoWrites, encodeLE } from "../.tmp/isopatch.js";
+import { scanIsoFilesForDnasModule } from "../.tmp/dnasimg.js";
 
 function parseArgs(argv) {
-  const o = { iso: null, out: null, inPlace: false, port: null, domain: null, dnas: true, ssl: true };
+  const o = { iso: null, out: null, inPlace: false, port: null, domain: null, dnas: true, ssl: false, cht: false, pnach: false, iso_out: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") o.help = true;
     else if (a === "--in-place") o.inPlace = true;
     else if (a === "--no-dnas") o.dnas = false;
+    else if (a === "--ssl") o.ssl = true;
     else if (a === "--no-ssl") o.ssl = false;
+    else if (a === "--cht") o.cht = true;
+    else if (a === "--pnach") o.pnach = true;
+    else if (a === "--no-iso") o.iso_out = false;
     else if (a === "--out") o.out = argv[++i];
     else if (a === "--port") o.port = parseInt(argv[++i], 10);
     else if (a === "--domain") o.domain = argv[++i];
@@ -40,7 +48,8 @@ function parseArgs(argv) {
 }
 
 const HELP = `Usage: npm run patch -- <iso> [--out <path>] [--in-place]
-                           [--port <n>] [--domain <host>] [--no-dnas] [--no-ssl]`;
+                           [--port <n>] [--domain <host>] [--no-dnas] [--ssl]
+                           [--cht] [--pnach] [--no-iso]`;
 
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help || !opts.iso) {
@@ -103,8 +112,49 @@ for (const t of game.targets) {
   patchTargets.push({ elf: new Elf(blob.data), lba, writes: targetWrites(t, port, domain) });
 }
 
+// Optional cheat outputs — the same OPL .cht / PCSX2 .pnach the browser produces,
+// written next to the output. (These carry only in-ELF writes; a Sony DNAS module
+// patch is ISO-only and can't be a cheat.)
+const outDir = dirname(opts.out ?? opts.iso);
+if (opts.cht) {
+  const name = chtFilename(serial);
+  writeFileSync(join(outDir, name), buildCht(serial, game.title, game.targets, port, domain));
+  console.log(`Wrote ${name}`);
+}
+if (opts.pnach) {
+  for (const f of buildPnach(serial, game.targets, port, domain)) {
+    writeFileSync(join(outDir, f.filename), f.content);
+    console.log(`Wrote ${f.filename}`);
+  }
+}
+if (!opts.iso_out) {
+  closeSync(fd);
+  process.exit(0);
+}
+
 const { writes, warnings } = buildIsoWrites(patchTargets);
 for (const w of warnings) console.warn(`  warning: ${w}`);
+
+// Fallback for stock Sony DNAS titles where NO in-ELF check was found (not
+// DNASSKIP / DirtyDnas / the main-ELF sony-gate): the auth runs in a relocated
+// module whose plaintext code is embedded on the disc. Scan for it and add the
+// raw byte patch. Skipped when an in-ELF method already covers DNAS (preferred,
+// since those are also expressible as .cht/.pnach).
+if (opts.dnas && !game.targets.some((t) => t.dnas.bne)) {
+  const readChunk = async (offset, len) => {
+    const b = Buffer.allocUnsafe(len);
+    readSync(fd, b, 0, len, offset);
+    return new Uint8Array(b.buffer, b.byteOffset, len);
+  };
+  const mod = await scanIsoFilesForDnasModule(readChunk, files, undefined, size);
+  if (mod) {
+    console.log(`DNAS module: found auth accessor @ 0x${mod.anchorOff.toString(16)} in the disc image.`);
+    for (const w of mod.writes) writes.push({ offset: w.off, bytes: encodeLE(w.value, 4), vaddr: 0 });
+  } else if (!game.targets.some((t) => t.enable.dnas)) {
+    console.warn("  warning: no in-ELF DNAS check and no embedded DNAS module signature found.");
+  }
+}
+
 if (writes.length === 0) {
   console.error("No patches to apply (nothing enabled or found).");
   closeSync(fd);

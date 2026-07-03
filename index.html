@@ -10,11 +10,81 @@
       <header>
         <h1>EA&nbsp;PS2 Patch Generator</h1>
         <p class="sub">
-          Drop a PS2 ISO of an EA online title. Toggle DNAS bypass, SSL bypass,
-          game-port and domain overrides per ELF. Everything runs locally in your browser — the disc is never
-          uploaded.
+          Drop a PS2 ISO of an EA online title to get a patched ISO, an OPL
+          <code>.cht</code> or a PCSX2 <code>.pnach</code>. Everything runs
+          locally in your browser — the disc is never uploaded.
         </p>
       </header>
+
+      <section class="faq">
+        <p class="faq-title">Guide</p>
+
+        <details class="faq-item">
+          <summary>Which patches should I enable?</summary>
+          <div class="faq-body">
+            <ul class="faq-list">
+              <li>
+                <span class="tag on">Enable</span>
+                <b>DNAS bypass</b> — mandatory for all games.
+              </li>
+              <li>
+                <span class="tag off">Disable</span>
+                <b>SSL bypass</b> — but <b>enable</b> it for the <code>Arena Football</code> &amp;
+                <code>NASCAR 07</code> dashboards, or whenever you override the game domain.
+              </li>
+              <li>
+                <span class="tag off">Disable</span>
+                <b>Edit game port</b> — enable only for the few games that need a specific
+                port to reach EA Nation Hub
+                <span class="k">(<code>NASCAR 06</code> → <code>40600</code>,
+                <code>NCAA Football 06</code> → <code>40500</code>)</span>.
+              </li>
+              <li>
+                <span class="tag off">Disable</span>
+                <b>Edit game domain</b> — only if you can't use a custom DNS. If so, keep the
+                default <code>eahub.eu</code> and make sure <b>SSL bypass</b> is enabled too.
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary>Should I patch the ISO or use the cheats?</summary>
+          <div class="faq-body">
+            Pick <b>one</b> — don't use both at the same time.
+            <ul class="faq-list" style="margin-top: 8px;">
+              <li><b>Patched ISO</b> — a ready-to-boot copy with the fixes baked in. Simplest: just boot it.</li>
+              <li><b>Cheats</b> (<code>.cht</code> / <code>.pnach</code>) — keep your original ISO and apply the fixes at runtime.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary>PS2 hardware — using the OPL <code>.cht</code></summary>
+          <div class="faq-body">
+            <ol class="faq-steps">
+              <li>Download the OPL cheat file or update the existing one by copying the lines in.</li>
+              <li>Put the <code>.cht</code> file in the <code>CHT</code> folder of your FMCB installation.</li>
+              <li>Enable cheats in OPL:
+                <span class="k">Options &rsaquo; Cheats Settings &rsaquo; PS2RD Cheat Engine &rsaquo; ON &rsaquo; Save Changes</span>.</li>
+            </ol>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary>PCSX2 emulator — using the <code>.pnach</code></summary>
+          <div class="faq-body">
+            <ol class="faq-steps">
+              <li>Download the patch(es) or update the existing one(s) by copying the lines in — <b>there are often 2 files!</b></li>
+              <li>Put them in the <code>cheats</code> (or <code>patch</code>) folder at the root of your <code>pcsx2</code> location.</li>
+              <li>Enable cheats:
+                <span class="k">Settings &rsaquo; Emulation</span>, then tick <b>Enable Cheats</b> under <span class="k">System Settings</span>.</li>
+              <li>Activate them when booting the game:
+                <span class="k">Settings &rsaquo; Game properties &rsaquo; Cheats (or Patches) &rsaquo; Enable</span>.</li>
+            </ol>
+          </div>
+        </details>
+      </section>
 
       <label id="drop" class="drop" for="file">
         <input id="file" type="file" accept=".iso,.bin,.img" hidden />
@@ -47,6 +117,17 @@
         <div id="warnings" class="warnings" hidden></div>
         <div id="targets" class="targets"></div>
 
+        <div id="module-dnas" class="target" hidden>
+          <h3>DNAS module bypass <span class="k">(Sony DNAS 2.x)</span></h3>
+          <div class="toggles">
+            <label class="toggle">
+              <input type="checkbox" id="module-dnas-enable" checked />
+              Patch the embedded DNAS module
+            </label>
+          </div>
+          <p class="note" id="module-dnas-info"></p>
+        </div>
+
         <div id="isopatch" class="output">
           <div class="output-head">
             <h2>Patched ISO</h2>
@@ -74,31 +155,24 @@
 
         <div class="output">
           <div class="output-head">
-            <h2>OPL cheat — <code id="cht-name"></code></h2>
+            <h2>OPL cheat</h2>
             <div class="btns">
               <button id="copy-cht" type="button">Copy</button>
               <button id="dl-cht" type="button" class="primary">Download .cht</button>
             </div>
           </div>
+          <p class="filename"><code id="cht-name"></code></p>
           <pre id="cht" class="code"></pre>
         </div>
 
-        <details class="output" open>
-          <summary>PCSX2 .pnach — one file per ELF (CRC computed automatically)</summary>
+        <div class="output">
+          <div class="output-head">
+            <h2>PCSX2 .pnach</h2>
+          </div>
+          <p class="note">One file per ELF (CRC computed automatically).</p>
           <div id="pnach"></div>
-        </details>
+        </div>
       </section>
-
-      <footer>
-        <p>
-          Finds the DNAS check by anchoring on the <code>DNASSKIP</code> string
-          reference, so it picks the correct branch even when the byte pattern
-          repeats. SSL bypass NOPs <code>ProtoAriesSecure</code> and keeps the
-          plain game port (<code>+1</code>&rarr;<code>+0</code>). OPL cheats also
-          carry a runtime <code>9x</code> hook so the EA_DASH patch applies once
-          the dashboard is in RAM.
-        </p>
-      </footer>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

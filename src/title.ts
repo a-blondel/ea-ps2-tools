@@ -6,7 +6,7 @@
 // token (ps2fifa07 -> fifa07), and uppercase. Falls back to the serial.
 
 // Hosts that appear across many EA builds and aren't the game codename.
-const NOISE = /demangler|dirtysock3/i;
+const NOISE = /demangler|msgconn|beta|dirtysock3/i;
 
 // Leading platform tokens to drop from the codename.
 const PLATFORM = /^(ps2)(?=[a-z])/i;

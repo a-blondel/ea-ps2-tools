@@ -15,7 +15,7 @@ import { ascii, findAll } from "./bytes.js";
 
 // Hosts that appear across many EA builds and aren't the game codename
 // (kept in sync with title.ts).
-const NOISE = /demangler|dirtysock/i;
+const NOISE = /demangler|msgconn|beta|dirtysock/i;
 
 const HOST_CHAR = (b: number) =>
   (b >= 0x61 && b <= 0x7a) || // a-z

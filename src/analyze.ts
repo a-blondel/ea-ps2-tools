@@ -53,7 +53,7 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     if (dnas.ambiguous) warnings.push("Main ELF: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in the main ELF.");
     if (!port) warnings.push("No game port found in the main ELF.");
-    targets.push({ label: "Main Game", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: true, port: false, domain: false } });
+    targets.push({ label: "Main Game", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: false, port: false, domain: false } });
   } else {
     warnings.push(`Main ELF "${serial}" not found in the ISO.`);
   }
@@ -69,7 +69,7 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     if (!dnas.bne) warnings.push("No DNAS check found in EA_DASH.ELF.");
     if (dnas.ambiguous) warnings.push("EA_DASH: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in EA_DASH.ELF.");
-    targets.push({ label: "EA Dashboard", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: true, port: false, domain: false } });
+    targets.push({ label: "EA Dashboard", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: false, port: false, domain: false } });
   } else {
     warnings.push("EA_DASH.ELF not found — dashboard cheat will be omitted.");
   }

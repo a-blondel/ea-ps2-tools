@@ -111,10 +111,18 @@ function domainWrites(t: ElfTarget, domain: string | null): Write[] {
 function targetBlocks(t: ElfTarget, port: number | null, domain: string | null): Block[] {
   const blocks: Block[] = [];
   if (t.enable.dnas && t.dnas.bne) {
+    // NOP the check/gate (or, for a Sony bgez gate, force it to an unconditional
+    // branch via gateValue); the Sony main-ELF gate also needs its busy-skip
+    // write so the poll succeeds on the first frame (no ~20s auth wait).
+    const writes: Write[] = [{ addr: t.dnas.bne.vaddr, value: t.dnas.gateValue ?? 0 }];
+    for (const w of t.dnas.extraWrites ?? []) writes.push({ addr: w.addr, value: w.value });
     blocks.push({
       title: "DNAS bypass",
-      description: "Skip the DNAS authentication check.",
-      writes: [{ addr: t.dnas.bne.vaddr, value: 0 }],
+      description:
+        t.dnas.method === "sonygate"
+          ? "Force the DNAS module-poll result to success (skips the auth wait)."
+          : "Skip the DNAS authentication check.",
+      writes,
     });
   }
   if (t.enable.ssl && (t.ssl.port || t.ssl.secure)) {
@@ -221,6 +229,7 @@ export function buildCht(
 
 export interface PnachFile {
   filename: string; // SERIAL_CRC.pnach
+  label: string; // which ELF it patches ("Main Game" | "EA Dashboard")
   content: string;
 }
 
@@ -261,7 +270,7 @@ export function buildPnach(
           "\n",
       )
       .join("\n");
-    files.push({ filename: `${ser}_${hex8(t.crc)}.pnach`, content });
+    files.push({ filename: `${ser}_${hex8(t.crc)}.pnach`, label: t.label, content });
   }
   return files;
 }

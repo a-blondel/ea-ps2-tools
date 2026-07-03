@@ -56,9 +56,10 @@ for (const f of wanted) {
 }
 
 const game = analyzeGame(serial, blobs);
+for (const t of game.targets) t.enable.ssl = true; // SSL defaults off now; exercise it here
 
-// Build the in-place patch targets: Elf + lba + the default-enabled writes
-// (DNAS + SSL on, port/domain off — matching analyzeGame's defaults).
+// Build the in-place patch targets: Elf + lba + the enabled writes
+// (DNAS + SSL on, port/domain off).
 const byName = (name) => blobs.find((b) => b.name.toUpperCase() === name);
 const patchTargets = game.targets.map((t, i) => {
   const blob = i === 0 ? byName(serial.toUpperCase()) : byName("EA_DASH.ELF");
