@@ -6,6 +6,7 @@ import { analyzeDnas } from "./dnas.js";
 import { analyzeSsl } from "./ssl.js";
 import { analyzePort } from "./port.js";
 import { analyzeDomain } from "./domain.js";
+import { analyzeRoster } from "./roster.js";
 import { guessTitle } from "./title.js";
 import type { ElfTarget } from "./cheats.js";
 
@@ -48,12 +49,13 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     const ssl = analyzeSsl(e);
     const port = analyzePort(e, ssl);
     const domain = analyzeDomain(e);
+    const roster = analyzeRoster(e);
     gameHost = domain?.host ?? null;
     if (!dnas.bne) warnings.push("No DNAS check found in the main ELF.");
     if (dnas.ambiguous) warnings.push("Main ELF: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in the main ELF.");
     if (!port) warnings.push("No game port found in the main ELF.");
-    targets.push({ label: "Main Game", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: false, port: false, domain: false } });
+    targets.push({ label: "Main Game", dnas, ssl, port, domain, roster, crc: e.crc(), enable: { dnas: true, ssl: false, roster: false, port: false, domain: false } });
   } else {
     warnings.push(`Main ELF "${serial}" not found in the ISO.`);
   }
@@ -66,10 +68,11 @@ export function analyzeGame(serial: string, blobs: NamedBlob[]): GameAnalysis {
     // Reuse the main ELF's host so we patch the real game domain, not the
     // dashboard's most-frequent (often a leftover test lobby) host.
     const domain = gameHost ? analyzeDomain(e, gameHost) : analyzeDomain(e);
+    const roster = analyzeRoster(e);
     if (!dnas.bne) warnings.push("No DNAS check found in EA_DASH.ELF.");
     if (dnas.ambiguous) warnings.push("EA_DASH: multiple DNAS candidates — verify the selected address.");
     if (!ssl.port) warnings.push("No SSL (ProtoAriesSecure) site found in EA_DASH.ELF.");
-    targets.push({ label: "EA Dashboard", dnas, ssl, port, domain, crc: e.crc(), enable: { dnas: true, ssl: false, port: false, domain: false } });
+    targets.push({ label: "EA Dashboard", dnas, ssl, port, domain, roster, crc: e.crc(), enable: { dnas: true, ssl: false, roster: false, port: false, domain: false } });
   } else {
     warnings.push("EA_DASH.ELF not found — dashboard cheat will be omitted.");
   }

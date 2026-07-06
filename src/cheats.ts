@@ -9,6 +9,7 @@ import type { DnasAnalysis } from "./dnas.js";
 import type { SslAnalysis } from "./ssl.js";
 import { oriA3, type PortAnalysis } from "./port.js";
 import { domainFits, type DomainAnalysis } from "./domain.js";
+import type { RosterAnalysis } from "./roster.js";
 
 export interface ElfTarget {
   label: string; // "Main Game" | "EA Dashboard"
@@ -16,8 +17,9 @@ export interface ElfTarget {
   ssl: SslAnalysis;
   port: PortAnalysis | null; // game port: data-word or connect-site (null if none)
   domain: DomainAnalysis | null; // EA hostname override target (null if none)
+  roster: RosterAnalysis | null; // roster-download skip site (null if none)
   crc?: number; // PCSX2 ELF CRC, for the pnach filename
-  enable: { dnas: boolean; ssl: boolean; port: boolean; domain: boolean }; // UI toggles
+  enable: { dnas: boolean; ssl: boolean; roster: boolean; port: boolean; domain: boolean }; // UI toggles
 }
 
 export interface Write {
@@ -135,6 +137,15 @@ function targetBlocks(t: ElfTarget, port: number | null, domain: string | null):
       writes,
     });
   }
+  if (t.enable.roster && t.roster?.skip) {
+    // Force HasLatestRoster to report "have latest" so the game never prompts
+    // for or fetches a new roster.
+    blocks.push({
+      title: "Roster download bypass",
+      description: "Skip the online roster update (no download prompt).",
+      writes: [{ addr: t.roster.skip.vaddr, value: t.roster.skip.value }],
+    });
+  }
   const pw = portWrites(t, port);
   if (pw.length) {
     blocks.push({ title: "Game port", description: `Set the game port to ${port}.`, writes: pw });
@@ -161,7 +172,7 @@ export function targetWrites(t: ElfTarget, port: number | null = null, domain: s
 }
 
 // Display order the merged .cht blocks keep, regardless of contributing ELF.
-const BLOCK_ORDER = ["DNAS bypass", "SSL bypass", "Game port", "Domain override"];
+const BLOCK_ORDER = ["DNAS bypass", "SSL bypass", "Roster download bypass", "Game port", "Domain override"];
 
 /**
  * Union of every ELF's blocks, merged by title (writes de-duplicated by address

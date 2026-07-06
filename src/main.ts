@@ -33,7 +33,7 @@ const moduleDnasEl = $<HTMLDivElement>("module-dnas");
 const moduleDnasEnable = $<HTMLInputElement>("module-dnas-enable");
 const moduleDnasInfo = $<HTMLParagraphElement>("module-dnas-info");
 
-type Feat = "dnas" | "ssl" | "port" | "domain";
+type Feat = "dnas" | "ssl" | "roster" | "port" | "domain";
 const SHARED: Feat[] = ["port", "domain"]; // one edit field drives every ELF
 
 let current: GameAnalysis | null = null;
@@ -87,6 +87,9 @@ function targetRow(t: ElfTarget, i: number): string {
   const domain = t.domain
     ? `${t.domain.host} <span class="k">(${t.domain.sites.length}×, ${t.domain.capacity} B max)</span>`
     : `<span class="miss">not found</span>`;
+  const roster = t.roster?.skip
+    ? `${hex8(t.roster.skip.vaddr)} <span class="k">(HasLatestRoster → true)</span>`
+    : `<span class="miss">not found</span>`;
   const crc = t.crc !== undefined ? hex8(t.crc) : "—";
   const extra =
     a.candidates.length > 1
@@ -95,6 +98,7 @@ function targetRow(t: ElfTarget, i: number): string {
   const labels = {
     dnas: "DNAS bypass",
     ssl: "SSL bypass",
+    roster: "Roster download bypass",
     port: "Edit game port",
     domain: "Edit game domain",
   };
@@ -107,11 +111,12 @@ function targetRow(t: ElfTarget, i: number): string {
       </label>`;
   return `<div class="target">
       <h3>${t.label}</h3>
-      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}${chk("port", !!t.port)}${chk("domain", !!t.domain)}</div>
+      <div class="toggles">${chk("dnas", !!a.bne)}${chk("ssl", !!t.ssl.port)}${chk("roster", !!t.roster?.skip)}${chk("port", !!t.port)}${chk("domain", !!t.domain)}</div>
       <div class="grid">
         <span class="k">DNAS BNE</span><span>${bne}</span>
         <span class="k">Hook (9x)</span><span>${hook}</span>
         <span class="k">SSL site</span><span>${ssl}</span>
+        <span class="k">Roster skip</span><span>${roster}</span>
         <span class="k">Game port</span><span>${port}</span>
         <span class="k">EA domain</span><span>${domain}</span>
         <span class="k">ELF CRC</span><span>${crc}</span>
@@ -166,7 +171,15 @@ function render(game: GameAnalysis) {
 
 /** Whether a target carries the analysis a feature needs. */
 function featAvail(t: ElfTarget, feat: Feat): boolean {
-  return feat === "port" ? !!t.port : feat === "domain" ? !!t.domain : feat === "ssl" ? !!t.ssl.port : !!t.dnas.bne;
+  return feat === "port"
+    ? !!t.port
+    : feat === "domain"
+      ? !!t.domain
+      : feat === "ssl"
+        ? !!t.ssl.port
+        : feat === "roster"
+          ? !!t.roster?.skip
+          : !!t.dnas.bne;
 }
 
 targetsEl.addEventListener("change", (e) => {

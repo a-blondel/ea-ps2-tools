@@ -12,6 +12,7 @@
 //     --domain <host>  also override the EA hostname
 //     --no-dnas        skip the DNAS bypass (on by default)
 //     --ssl            also apply the SSL bypass (off by default)
+//     --roster         also skip the online roster download (off by default)
 //     --cht            also write the OPL .cht next to the output
 //     --pnach          also write the PCSX2 .pnach file(s) next to the output
 //     --no-iso         don't build a patched ISO (use with --cht/--pnach)
@@ -27,7 +28,7 @@ import { buildIsoWrites, encodeLE } from "../.tmp/isopatch.js";
 import { scanIsoFilesForDnasModule } from "../.tmp/dnasimg.js";
 
 function parseArgs(argv) {
-  const o = { iso: null, out: null, inPlace: false, port: null, domain: null, dnas: true, ssl: false, cht: false, pnach: false, iso_out: true };
+  const o = { iso: null, out: null, inPlace: false, port: null, domain: null, dnas: true, ssl: false, roster: false, cht: false, pnach: false, iso_out: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") o.help = true;
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     else if (a === "--no-dnas") o.dnas = false;
     else if (a === "--ssl") o.ssl = true;
     else if (a === "--no-ssl") o.ssl = false;
+    else if (a === "--roster") o.roster = true;
     else if (a === "--cht") o.cht = true;
     else if (a === "--pnach") o.pnach = true;
     else if (a === "--no-iso") o.iso_out = false;
@@ -49,7 +51,7 @@ function parseArgs(argv) {
 
 const HELP = `Usage: npm run patch -- <iso> [--out <path>] [--in-place]
                            [--port <n>] [--domain <host>] [--no-dnas] [--ssl]
-                           [--cht] [--pnach] [--no-iso]`;
+                           [--roster] [--cht] [--pnach] [--no-iso]`;
 
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help || !opts.iso) {
@@ -103,6 +105,7 @@ const patchTargets = [];
 for (const t of game.targets) {
   t.enable.dnas = opts.dnas && !!t.dnas.bne;
   t.enable.ssl = opts.ssl && !!t.ssl.port;
+  t.enable.roster = opts.roster && !!t.roster?.skip;
   t.enable.port = port != null && !!t.port;
   t.enable.domain = domain != null && !!t.domain;
   const elfName = t.label === "EA Dashboard" ? "EA_DASH.ELF" : serial.toUpperCase();

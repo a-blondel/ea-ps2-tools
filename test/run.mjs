@@ -7,6 +7,8 @@ import { readFileSync } from "node:fs";
 import assert from "node:assert";
 import { analyzeGame } from "../.tmp/analyze.js";
 import { buildCht, buildPnach } from "../.tmp/cheats.js";
+import { Elf } from "../.tmp/elf.js";
+import { analyzeRoster } from "../.tmp/roster.js";
 
 const DIR = process.env.TEST_PS2_DIR;
 if (!DIR) {
@@ -49,6 +51,25 @@ assert.equal(mainSsl.port.value >>> 0, 0x24e70000, "main SSL port value (+0)");
 assert.equal(mainSsl.secure.vaddr >>> 0, 0x005d10c8, "main SSL secure (NOP) addr");
 assert.equal(dashSsl.port.vaddr >>> 0, 0x001e4088, "dash SSL port addr");
 assert.equal(dashSsl.secure.vaddr >>> 0, 0x001e4090, "dash SSL secure (NOP) addr");
+
+// Roster download bypass: main-only. Force HasLatestRoster's pushed bool to true
+// (dmove a0,v0 -> li a0,1) so the game never prompts for or fetches a roster.
+assert.equal(game.targets[0].roster.skip.vaddr >>> 0, 0x00602950, "main roster skip addr");
+assert.equal(game.targets[0].roster.skip.value >>> 0, 0x24040001, "main roster skip value (li a0,1)");
+assert.equal(game.targets[1].roster.skip, null, "dash has no roster adaptor");
+// Opt-in: off by default, so the default .cht carries no roster block.
+assert.ok(!cht.includes("Roster download bypass"), "roster off by default -> no block");
+const withRoster = structuredClone(game.targets);
+for (const t of withRoster) if (t.roster?.skip) t.enable.roster = true;
+const chtRoster = buildCht(serial, "FIFA07", withRoster);
+assert.ok(
+  chtRoster.includes("//Roster download bypass: Skip the online roster update (no download prompt)."),
+  "roster block header",
+);
+assert.ok(chtRoster.includes("20602950 24040001"), "roster code (li a0,1)");
+const pnachRoster = buildPnach(serial, withRoster);
+assert.ok(pnachRoster[0].content.includes("[Roster download bypass]"), "main pnach roster section");
+assert.ok(pnachRoster[0].content.includes("patch=1,EE,20602950,extended,24040001"), "roster pnach word");
 
 // Default .cht: per-ELF hook group, one comment-headed block per feature, every
 // ELF's writes repeated under each hook (OPL applies the whole list per hook).
@@ -164,5 +185,20 @@ assert.equal(pnach[0].content, pnachMain, "main pnach content/format");
 assert.equal(pnach[1].filename, "SLUS-21433_C4923636.pnach", "dash pnach filename");
 assert.ok(pnach[1].content.includes("patch=1,EE,201E16CC,extended,00000000"), "dash pnach DNAS line");
 assert.ok(pnach[1].content.startsWith("[DNAS bypass]"), "dash pnach starts with a section");
+
+// Roster detection on an older build (NHL 06) where "HasLatestRoster" appears
+// twice — a debug copy plus the dispatch-table copy. Detection must skip the
+// copy no pointer references and still land the handler. Guarded on TEST_NHL_DIR.
+const NHL = process.env.TEST_NHL_DIR;
+if (NHL) {
+  const nhl = new Elf(new Uint8Array(readFileSync(`${NHL}/SLUS_212.41`)));
+  const r = analyzeRoster(nhl);
+  assert.ok(r.skip, "NHL06: roster site found despite duplicate method string");
+  assert.equal(r.skip.vaddr >>> 0, 0x003db568, "NHL06 roster skip addr");
+  assert.equal(r.skip.value >>> 0, 0x24040001, "NHL06 roster skip value (li a0,1)");
+  console.log("NHL06 roster detection PASSED ✓");
+} else {
+  console.log("SKIP NHL06 roster check: set TEST_NHL_DIR.");
+}
 
 console.log("ALL ASSERTIONS PASSED ✓");

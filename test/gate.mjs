@@ -59,8 +59,8 @@ for (const c of CASES) {
   assert.deepEqual(dnas.extraWrites, [c.busy], `${serial}: busy-skip write`);
 
   const t = {
-    label: "Main Game", dnas, ssl: { port: null, secure: null }, port: null, domain: null,
-    enable: { dnas: true, ssl: false, port: false, domain: false },
+    label: "Main Game", dnas, ssl: { port: null, secure: null }, port: null, domain: null, roster: null,
+    enable: { dnas: true, ssl: false, roster: false, port: false, domain: false },
   };
   const ws = targetWrites(t);
   assert.ok(ws.some((w) => (w.addr >>> 0) === c.gate && (w.value >>> 0) === c.gateValue), `${serial}: gate write in list`);

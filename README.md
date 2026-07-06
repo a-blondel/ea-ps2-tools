@@ -29,6 +29,7 @@ https://a-blondel.github.io/ea-ps2-tools/
 - **DNAS bypass** — always **on**. Mandatory for all games.
 - **SSL bypass** — **off**, except: the `Arena Football` & `NASCAR 07` dashboards need it,
   and it's required whenever you override the game domain.
+- **Roster download bypass** — **off**, unless the game stalls on a roster update.
 - **Edit game port** — **off**, except the few games that need a specific port to reach
   EA Nation Hub (`NASCAR 06` → `40600`, `NCAA Football 06` → `40500`).
 - **Edit game domain** — **off** unless you can't run a custom DNS. If you enable it, keep
